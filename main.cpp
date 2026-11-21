@@ -9,6 +9,68 @@
 #include "AssetManager.hpp"
 #include "Cutscene.hpp"
 #include "SaveSystem.hpp"
+#include "Network.hpp"
+#include <type_traits>
+
+// Helpers C++17 para compatibilidade segura com campos internos de SquadAI.hpp e Objectives.hpp
+template <typename T, typename = void> struct HasShootTimer : std::false_type {};
+template <typename T> struct HasShootTimer<T, std::void_t<decltype(std::declval<T>().shootTimer)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasFireCooldown : std::false_type {};
+template <typename T> struct HasFireCooldown<T, std::void_t<decltype(std::declval<T>().fireCooldown)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasTimerField : std::false_type {};
+template <typename T> struct HasTimerField<T, std::void_t<decltype(std::declval<T>().timer)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasExtractTimerField : std::false_type {};
+template <typename T> struct HasExtractTimerField<T, std::void_t<decltype(std::declval<T>().extractTimer)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasElapsedTimeField : std::false_type {};
+template <typename T> struct HasElapsedTimeField<T, std::void_t<decltype(std::declval<T>().elapsedTime)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasStatsElapsedTimeField : std::false_type {};
+template <typename T> struct HasStatsElapsedTimeField<T, std::void_t<decltype(std::declval<T>().stats.elapsedTime)>> : std::true_type {};
+
+template <typename T, typename = void> struct HasStatsTimeElapsedField : std::false_type {};
+template <typename T> struct HasStatsTimeElapsedField<T, std::void_t<decltype(std::declval<T>().stats.timeElapsed)>> : std::true_type {};
+
+template <typename T>
+void SuppressBotFireTimer(T& ally) {
+    if constexpr (HasShootTimer<T>::value) ally.shootTimer = 99.0f;
+    if constexpr (HasFireCooldown<T>::value) ally.fireCooldown = 99.0f;
+}
+
+template <typename T>
+float ReadExtractionProgress(const T& ext) {
+    if constexpr (HasTimerField<T>::value) return ext.timer;
+    else if constexpr (HasExtractTimerField<T>::value) return ext.extractTimer;
+    else return 0.0f;
+}
+
+template <typename T>
+void WriteExtractionProgress(T& ext, float val) {
+    if constexpr (HasTimerField<T>::value) ext.timer = val;
+    else if constexpr (HasExtractTimerField<T>::value) ext.extractTimer = val;
+    else (void)val;
+}
+
+template <typename T>
+float ReadMissionTimer(const T& m) {
+    if constexpr (HasElapsedTimeField<T>::value) return m.elapsedTime;
+    else if constexpr (HasTimerField<T>::value) return m.timer;
+    else if constexpr (HasStatsElapsedTimeField<T>::value) return m.stats.elapsedTime;
+    else if constexpr (HasStatsTimeElapsedField<T>::value) return m.stats.timeElapsed;
+    else return 0.0f;
+}
+
+template <typename T>
+void WriteMissionTimer(T& m, float val) {
+    if constexpr (HasElapsedTimeField<T>::value) m.elapsedTime = val;
+    else if constexpr (HasTimerField<T>::value) m.timer = val;
+    else if constexpr (HasStatsElapsedTimeField<T>::value) m.stats.elapsedTime = val;
+    else if constexpr (HasStatsTimeElapsedField<T>::value) m.stats.timeElapsed = val;
+    else (void)val;
+}
 
 struct HitmarkerFeedback {
     float timer = 0.0f;
@@ -16,6 +78,16 @@ struct HitmarkerFeedback {
     Color color = WHITE;
     const char* callout = "";
 };
+
+Vector3 GetSquadSpawnPosition(int slot) {
+    switch (slot) {
+        case 0:  return {  0.0f, 0.5f, 14.0f }; // Alpha
+        case 1:  return { -5.5f, 0.0f,  4.0f }; // Bravo
+        case 2:  return {  5.5f, 0.0f,  4.0f }; // Charlie
+        case 3:  return {  9.0f, 0.0f, -2.0f }; // Delta
+        default: return {  0.0f, 0.5f, 14.0f };
+    }
+}
 
 void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePlayer& player,
                         ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
@@ -25,7 +97,7 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
                         SquadOrder& currentOrder, TacticalPing& tacticalPing,
                         HitmarkerFeedback& hitmarker, MissionManager& mission,
                         CutsceneManager& cutscenes, Camera3D& camera, ProceduralAudio& audio,
-                        const SaveSystem& saveSystem) {
+                        const SaveSystem& saveSystem, const LanNetworkManager& net) {
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
     saveSystem.ApplyLoadoutToWeapon(weapon);
@@ -56,16 +128,32 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         mission.SetupForMode(false, true);
     } else {
         world = LevelLoader::LoadFromFile("mapa_squad.txt", MapPreset::SQUAD_ARENA);
-        player.pos = { 0.0f, 0.5f, 14.0f };
-        allies = {
-            { 1, "Bravo",   { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
-            { 2, "Charlie", {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME },
-            { 3, "Delta",   {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 50.0f, 1.3f, 4.2f, GOLD }
-        };
+
+        if (net.IsClient()) {
+            player.pos = GetSquadSpawnPosition(net.localSlot);
+            player.pos.y = 0.5f;
+
+            const char* names[4] = { "Alpha", "Bravo", "Charlie", "Delta" };
+            Color colors[4] = { WHITE, SKYBLUE, LIME, GOLD };
+            int allyIdx = 1;
+            for (int s = 0; s < 4; s++) {
+                if (s == net.localSlot) continue;
+                Vector3 sp = GetSquadSpawnPosition(s);
+                sp.y = 0.0f;
+                allies.push_back({ allyIdx++, names[s], sp, sp, sp, 100.0f, 50.0f, 0.5f, 0.0f, colors[s] });
+            }
+        } else {
+            player.pos = { 0.0f, 0.5f, 14.0f };
+            allies = {
+                { 1, "Bravo",   { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
+                { 2, "Charlie", {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME },
+                { 3, "Delta",   {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 50.0f, 1.3f, 4.2f, GOLD }
+            };
+        }
+
         ResetWave(enemies);
 
-        // Escala dificuldade e reforços conforme a fase escolhida no Briefing (1..3)
-        int phase = saveSystem.data.selectedPhase;
+        int phase = net.IsClient() && net.hasSnapshot ? (int)net.latestSnapshot.phase : saveSystem.data.selectedPhase;
         if (phase >= 2) {
             int nextId = (int)enemies.size() + 1;
             enemies.push_back({ nextId++, { -11.5f, 0.0f, -6.5f }, 110.0f, 110.0f });
@@ -89,9 +177,9 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     camera.target = target;
     camera.fovy = saveSystem.data.baseFov;
 
-    bool isCampaign = (mode != GameMode::MOVEMENT_TEST && mode != GameMode::SUPPRESSION_RANGE);
-    cutscenes.SetupForMode(isCampaign, eye, target);
-    if (isCampaign) {
+    bool playIntroCutscene = (mode != GameMode::MOVEMENT_TEST && mode != GameMode::SUPPRESSION_RANGE && !net.IsActive());
+    cutscenes.SetupForMode(playIntroCutscene, eye, target);
+    if (playIntroCutscene) {
         cutscenes.Play(0, eye, target, saveSystem.data.baseFov, audio);
     }
 }
@@ -104,10 +192,25 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
     return Vector3Normalize({ dir.x + rx, dir.y + ry, dir.z + rz });
 }
 
+WeaponStats GetWeaponStatsById(WeaponId id) {
+    ViewmodelWeapon temp;
+    for (int slot = 1; slot <= 5; slot++) {
+        temp.SelectSlot(slot);
+        for (int sub = 0; sub < 4; sub++) {
+            if (temp.GetCurrentStats().id == id) {
+                return temp.GetCurrentStats();
+            }
+            temp.SelectSlot(slot);
+        }
+    }
+    temp.SelectSlot(1);
+    return temp.GetCurrentStats();
+}
+
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Loadout, Configuracoes & Save (SAVEPOINT_18)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Multiplayer LAN UDP (SAVEPOINT_19)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -121,12 +224,14 @@ int main() {
     AssetManager assets;
     assets.Init();
 
+    LanNetworkManager net;
     MainMenu menu;
     InGameMapEditor mapEditor;
     CutsceneManager cutscenes;
     GameMode currentMode = GameMode::MAIN_MENU;
     bool shouldQuit = false;
     bool victoryRecordedForRun = false;
+    uint32_t hostSnapshotTick = 0;
 
     std::vector<WorldBlock> world;
     SourcePlayer player;
@@ -160,11 +265,12 @@ int main() {
         if (reloadAssetsBannerTimer > 0.0f) reloadAssetsBannerTimer -= dt;
         if (saveSystem.saveBannerTimer > 0.0f) saveSystem.saveBannerTimer -= dt;
 
-        if (IsKeyPressed(KEY_M)) {
+        net.PollPackets(dt, (uint8_t)saveSystem.data.selectedPhase);
+
+        if (IsKeyPressed(KEY_M) && !(currentMode == GameMode::MAIN_MENU && menu.screen == MenuScreen::LAN_LOBBY && menu.ipFieldFocused)) {
             audio.ToggleMute();
         }
 
-        // Hot-Reload de modelos (.glb) e sons externos (.ogg / .wav) com F7
         if (IsKeyPressed(KEY_F7)) {
             assets.ReloadAll();
             audio.ReloadExternalAssets();
@@ -174,7 +280,7 @@ int main() {
         }
 
         // =====================================================================
-        // ESTADO 1: MENU DE INICIALIZAÇÃO, BRIEFING/LOADOUT E CONFIGURAÇÕES
+        // ESTADO 1: MENU DE INICIALIZAÇÃO, BRIEFING, LOBBY LAN E CONFIGURAÇÕES
         // =====================================================================
         if (currentMode == GameMode::MAIN_MENU) {
             if (IsCursorHidden()) EnableCursor();
@@ -183,6 +289,7 @@ int main() {
 
             if (IsKeyPressed(KEY_ESCAPE)) {
                 if (menu.IsInSubScreen()) {
+                    if (menu.screen == MenuScreen::LAN_LOBBY) net.Shutdown();
                     saveSystem.Save();
                     menu.ReturnToMain();
                     audio.PlayOrder();
@@ -192,11 +299,12 @@ int main() {
                 }
             }
 
-            GameMode chosen = menu.Update(largura, altura, saveSystem, audio);
+            GameMode chosen = menu.Update(largura, altura, saveSystem, audio, net);
             if (chosen == GameMode::EXIT_GAME) {
                 shouldQuit = true;
                 continue;
             } else if (chosen == GameMode::MAP_EDITOR) {
+                net.Shutdown();
                 currentMode = GameMode::MAP_EDITOR;
                 mapEditor.Enter(world);
                 audio.PlayOrder();
@@ -204,13 +312,14 @@ int main() {
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
                 victoryRecordedForRun = false;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem);
+                hostSnapshotTick = 0;
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
                 menu.ReturnToMain();
                 DisableCursor();
             }
 
             BeginDrawing();
-                menu.Draw(largura, altura, saveSystem);
+                menu.Draw(largura, altura, saveSystem, net);
                 const char* audioTag = audio.muted
                     ? "[M] Som: MUDO"
                     : TextFormat("[M] Audio 3D: ON (%d SFX / %d Musicas)", audio.externalSfxCount, audio.externalMusicCount);
@@ -247,10 +356,11 @@ int main() {
         }
 
         // =====================================================================
-        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D
+        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D (SINGLEPLAYER OU CO-OP LAN)
         // =====================================================================
         if (IsKeyPressed(KEY_ESCAPE)) {
             cutscenes.Skip();
+            net.Shutdown();
             currentMode = GameMode::MAIN_MENU;
             EnableCursor();
             continue;
@@ -259,12 +369,12 @@ int main() {
         if (orderBannerTimer > 0.0f) orderBannerTimer -= dt;
         if (hitmarker.timer > 0.0f) hitmarker.timer -= dt;
 
-        if (IsKeyPressed(KEY_F5)) {
+        if (IsKeyPressed(KEY_F5) && !net.IsClient()) {
             victoryRecordedForRun = false;
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem);
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
         }
 
-        if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying()) {
+        if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying() && !net.IsActive()) {
             Vector3 eye = player.GetEyePosition();
             Vector3 tgt = Vector3Add(eye, player.GetForward3D());
             cutscenes.Play(0, eye, tgt, camera.fovy, audio);
@@ -280,7 +390,6 @@ int main() {
             audio.PlayOrder();
         }
 
-        // Registra vitória no savegame.cfg uma única vez por partida concluída
         if (mission.state == MissionState::VICTORY && !victoryRecordedForRun) {
             victoryRecordedForRun = true;
             saveSystem.RecordMissionVictory(saveSystem.data.selectedPhase, mission.stats.enemiesEliminated, mission.stats.headshotsLanded);
@@ -311,7 +420,7 @@ int main() {
                 }
             }
 
-            if (!player.isDowned && !allies.empty()) {
+            if (!player.isDowned && !allies.empty() && !net.IsClient()) {
                 if (IsKeyPressed(KEY_F1)) {
                     currentOrder = SquadOrder::ADVANCE;
                     orderBannerTimer = 2.2f;
@@ -349,7 +458,9 @@ int main() {
             }
 
             if (player.pos.y < -20.0f) {
-                player.pos = (currentMode == GameMode::MOVEMENT_TEST) ? Vector3{ 0.0f, 0.5f, 20.0f } : Vector3{ 0.0f, 0.5f, 14.0f };
+                player.pos = (currentMode == GameMode::MOVEMENT_TEST)
+                    ? Vector3{ 0.0f, 0.5f, 20.0f }
+                    : GetSquadSpawnPosition(net.IsClient() ? net.localSlot : 0);
                 player.vel = { 0.0f, 0.0f, 0.0f };
             }
 
@@ -389,288 +500,509 @@ int main() {
                 }
             }
 
-            if (!player.isDowned && !allies.empty()) {
-                if (IsKeyDown(KEY_E)) {
-                    if (player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
-                        player.draggingAllyId = allies[nearbyDownedIdx].id;
-                    }
-                    if (player.draggingAllyId != -1) {
-                        SquadAlly& dragged = allies[player.draggingAllyId - 1];
-                        if (!dragged.isDowned || Vector3Distance(player.pos, dragged.pos) > 4.2f) {
-                            player.draggingAllyId = -1;
-                        } else {
-                            dragged.isBeingDragged = true;
-                            Vector3 horizForward = { sinf(player.yaw), 0.0f, cosf(player.yaw) };
-                            Vector3 holdPos = Vector3Add(player.pos, Vector3Scale(horizForward, 1.35f));
-                            MoveAllyWithCollision(dragged, holdPos, 14.0f, dt, world);
+            // =================================================================
+            // RAMO A: HOST AUTORITATIVO OU SINGLEPLAYER
+            // =================================================================
+            if (!net.IsClient()) {
+                std::array<bool, 3> savedHumanSlot = { false, false, false };
+                std::array<Vector3, 3> savedHumanPos = {};
+                std::array<bool, 3> savedHumanCrouched = { false, false, false };
+
+                if (net.IsHost()) {
+                    for (int s = 1; s <= 3; s++) {
+                        if (!net.clientSlots[s].connected || (s - 1) >= (int)allies.size()) continue;
+                        SquadAlly& ally = allies[s - 1];
+                        const NetClientInputPacket& inPkt = net.clientSlots[s].latestInput;
+
+                        ally.pos = { inPkt.posX, inPkt.posY, inPkt.posZ };
+                        ally.anchorPos = ally.pos;
+                        bool crouched = (inPkt.flags & (1 << 0)) != 0;
+                        ally.isSuppressed = crouched;
+                        ally.hasPingOrder = false;
+                        SuppressBotFireTimer(ally);
+
+                        savedHumanSlot[s - 1] = true;
+                        savedHumanPos[s - 1] = ally.pos;
+                        savedHumanCrouched[s - 1] = crouched;
+
+                        if ((inPkt.flags & (1 << 2)) && !ally.isDowned) {
+                            if (player.isDowned && Vector3Distance(ally.pos, player.pos) < 3.0f) {
+                                player.reviveProgress += dt * 0.42f;
+                                if (player.reviveProgress >= 1.0f) {
+                                    player.isDowned = false;
+                                    player.hp = 75.0f;
+                                    player.reviveProgress = 0.0f;
+                                    audio.PlayRevive();
+                                }
+                            }
+                            for (size_t other = 0; other < allies.size(); other++) {
+                                if ((int)other == (s - 1) || !allies[other].isDowned) continue;
+                                if (Vector3Distance(ally.pos, allies[other].pos) < 3.0f) {
+                                    allies[other].reviveProgress += dt * 0.42f;
+                                    if (allies[other].reviveProgress >= 1.0f) {
+                                        allies[other].isDowned = false;
+                                        allies[other].hp = 75.0f;
+                                        allies[other].lastHp = 75.0f;
+                                        allies[other].reviveProgress = 0.0f;
+                                        allies[other].bleedoutTimer = 25.0f;
+                                        allies[other].anchorPos = allies[other].pos;
+                                        audio.PlayRevive();
+                                    }
+                                }
+                            }
+                        }
+
+                        if (net.clientSlots[s].hasPendingShot) {
+                            net.clientSlots[s].hasPendingShot = false;
+                            if (!ally.isDowned) {
+                                WeaponStats cStats = GetWeaponStatsById((WeaponId)inPkt.weaponId);
+                                Vector3 cOrigin = { inPkt.shotOriginX, inPkt.shotOriginY, inPkt.shotOriginZ };
+                                Vector3 cDir = Vector3Normalize({ inPkt.shotDirX, inPkt.shotDirY, inPkt.shotDirZ });
+                                Vector3 cMuzzle = Vector3Add(ally.GetEyePos(), Vector3Scale(cDir, 0.45f));
+
+                                ally.aggro = std::min(100.0f, ally.aggro + cStats.aggroOnFire);
+
+                                for (int p = 0; p < cStats.pelletCount; p++) {
+                                    Vector3 pDir = ApplySpreadToDirection(cDir, cStats.spread);
+                                    Ray ray = { cOrigin, pDir };
+                                    BallisticHitResult hitRes = TraceBallisticShot(ray, cStats.range, cStats.penetrationPower, world, enemies);
+                                    float shotDist = Vector3Distance(cOrigin, hitRes.endPoint);
+
+                                    int barrelIdx = mission.CheckBarrelShot(ray, shotDist);
+                                    if (barrelIdx != -1) {
+                                        RayCollision bCol = GetRayCollisionBox(ray, mission.barrels[barrelIdx].GetAABB());
+                                        if (!cStats.isMelee) {
+                                            tracers.push_back({ cMuzzle, bCol.point, ally.color, 0.09f });
+                                            net.QueueEvent(NetEventType::SHOT_TRACER, (uint8_t)s, cMuzzle, bCol.point);
+                                        }
+                                        mission.DamageBarrel(barrelIdx, cStats.damage, explosions);
+                                        continue;
+                                    }
+
+                                    if (!cStats.isMelee) {
+                                        tracers.push_back({ cMuzzle, hitRes.endPoint, ally.color, 0.09f });
+                                        net.QueueEvent(NetEventType::SHOT_TRACER, (uint8_t)s, cMuzzle, hitRes.endPoint);
+                                    }
+
+                                    if (hitRes.hitEnemyIdx != -1) {
+                                        EnemyBot& targetEnemy = enemies[hitRes.hitEnemyIdx];
+                                        bool wasAlive = targetEnemy.IsAlive();
+                                        targetEnemy.hp -= cStats.damage * hitRes.damageMultiplier;
+                                        targetEnemy.suppression = std::min(100.0f, targetEnemy.suppression + cStats.suppressionOnHit);
+                                        ally.aggro = std::min(100.0f, ally.aggro + cStats.aggroOnHit);
+                                        if (wasAlive && !targetEnemy.IsAlive()) {
+                                            mission.stats.enemiesEliminated++;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (net.clientSlots[s].hasPendingGrenade) {
+                            net.clientSlots[s].hasPendingGrenade = false;
+                            if (!ally.isDowned) {
+                                bool isFlash = (inPkt.isFlashbang != 0);
+                                Vector3 gPos = { inPkt.nadePosX, inPkt.nadePosY, inPkt.nadePosZ };
+                                Vector3 gVel = { inPkt.nadeVelX, inPkt.nadeVelY, inPkt.nadeVelZ };
+                                grenades.push_back({ gPos, gVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                            }
+                        }
+
+                        if (net.clientSlots[s].hasPendingPing) {
+                            net.clientSlots[s].hasPendingPing = false;
+                            if (!ally.isDowned) {
+                                Vector3 pOrig = { inPkt.shotOriginX, inPkt.shotOriginY, inPkt.shotOriginZ };
+                                Vector3 pDir = Vector3Normalize({ inPkt.shotDirX, inPkt.shotDirY, inPkt.shotDirZ });
+                                if (ProcessTacticalPing(pOrig, pDir, world, allies, enemies, tacticalPing)) {
+                                    audio.PlayOrder();
+                                }
+                            }
                         }
                     }
-                } else {
-                    player.draggingAllyId = -1;
                 }
 
-                if (IsKeyDown(KEY_F) && player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
-                    SquadAlly& target = allies[nearbyDownedIdx];
-                    target.reviveProgress += dt * 0.42f;
-                    if (target.reviveProgress >= 1.0f) {
-                        target.isDowned = false;
-                        target.hp = 75.0f;
-                        target.lastHp = 75.0f;
-                        target.reviveProgress = 0.0f;
-                        target.bleedoutTimer = 25.0f;
-                        target.anchorPos = target.pos;
-                        audio.PlayRevive();
-                    }
-                } else {
-                    for (auto& ally : allies) {
-                        if (ally.isDowned) ally.reviveProgress = std::max(0.0f, ally.reviveProgress - dt * 0.5f);
-                    }
-                }
-            }
-
-            mission.Update(dt, player, weapon, allies, enemies, (nearbyDownedIdx != -1), audio);
-            weapon.Update(dt, mouseDelta, horizSpeed, player.isGrounded);
-
-            camera.position = eyePos;
-            camera.target = Vector3Add(eyePos, forward);
-
-            if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) && !player.isDowned && !allies.empty()) {
-                if (ProcessTacticalPing(eyePos, forward, world, allies, enemies, tacticalPing)) {
-                    if (audio.initialized) {
-                        SetSoundPitch(audio.sfxOrder, (tacticalPing.type == PingType::FOCUS_TARGET) ? 1.28f : 0.92f);
-                        audio.PlayOrder();
-                    }
-                }
-            }
-
-            float maxAllyAggro = 0.0f;
-            for (const auto& ally : allies) {
-                if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
-            }
-            bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
-
-            const WeaponStats& wStats = weapon.GetCurrentStats();
-            bool triggerPulled = wStats.isAutomatic
-                ? IsMouseButtonDown(MOUSE_BUTTON_LEFT)
-                : IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-
-            if (triggerPulled) {
-                if (weapon.CanFire()) {
-                    weapon.ConsumeAndAnimateFire();
-                    audio.PlayWeaponAction(wStats.id, isStealthFlank);
-
-                    if (!player.isDowned && !enemies.empty()) {
-                        player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnFire);
-                    }
-
-                    if (wStats.isGrenade) {
-                        bool isFlash = (wStats.id == WeaponId::GADGET_FLASH);
-                        Vector3 spawnPos = Vector3Add(eyePos, Vector3Scale(forward, 0.65f));
-                        Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
-                        throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
-                        grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                if (!player.isDowned && !allies.empty()) {
+                    if (IsKeyDown(KEY_E)) {
+                        if (player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
+                            player.draggingAllyId = allies[nearbyDownedIdx].id;
+                        }
+                        if (player.draggingAllyId != -1) {
+                            SquadAlly& dragged = allies[player.draggingAllyId - 1];
+                            if (!dragged.isDowned || Vector3Distance(player.pos, dragged.pos) > 4.2f) {
+                                player.draggingAllyId = -1;
+                            } else {
+                                dragged.isBeingDragged = true;
+                                Vector3 horizForward = { sinf(player.yaw), 0.0f, cosf(player.yaw) };
+                                Vector3 holdPos = Vector3Add(player.pos, Vector3Scale(horizForward, 1.35f));
+                                MoveAllyWithCollision(dragged, holdPos, 14.0f, dt, world);
+                            }
+                        }
                     } else {
-                        Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(listenerRight, 0.24f), { 0, -0.18f, 0 }));
+                        player.draggingAllyId = -1;
+                    }
 
-                        bool anyHit = false;
-                        bool anyHeadshot = false;
-                        bool anyWallbang = false;
-                        bool anyKill = false;
-                        bool hitBarrel = false;
+                    if (IsKeyDown(KEY_F) && player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
+                        SquadAlly& target = allies[nearbyDownedIdx];
+                        target.reviveProgress += dt * 0.42f;
+                        if (target.reviveProgress >= 1.0f) {
+                            target.isDowned = false;
+                            target.hp = 75.0f;
+                            target.lastHp = 75.0f;
+                            target.reviveProgress = 0.0f;
+                            target.bleedoutTimer = 25.0f;
+                            target.anchorPos = target.pos;
+                            audio.PlayRevive();
+                        }
+                    } else {
+                        for (auto& ally : allies) {
+                            if (ally.isDowned) ally.reviveProgress = std::max(0.0f, ally.reviveProgress - dt * 0.5f);
+                        }
+                    }
+                }
 
-                        for (int p = 0; p < wStats.pelletCount; p++) {
-                            Vector3 shotDir = ApplySpreadToDirection(forward, wStats.spread);
-                            Ray ray = { eyePos, shotDir };
+                mission.Update(dt, player, weapon, allies, enemies, (nearbyDownedIdx != -1), audio);
+                weapon.Update(dt, mouseDelta, horizSpeed, player.isGrounded);
 
-                            BallisticHitResult hitRes = TraceBallisticShot(ray, wStats.range, wStats.penetrationPower, world, enemies);
-                            float shotDist = Vector3Distance(eyePos, hitRes.endPoint);
+                camera.position = eyePos;
+                camera.target = Vector3Add(eyePos, forward);
 
-                            int barrelIdx = mission.CheckBarrelShot(ray, shotDist);
-                            if (barrelIdx != -1) {
-                                RayCollision bCol = GetRayCollisionBox(ray, mission.barrels[barrelIdx].GetAABB());
+                if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) && !player.isDowned && !allies.empty()) {
+                    if (ProcessTacticalPing(eyePos, forward, world, allies, enemies, tacticalPing)) {
+                        if (audio.initialized) {
+                            SetSoundPitch(audio.sfxOrder, (tacticalPing.type == PingType::FOCUS_TARGET) ? 1.28f : 0.92f);
+                            audio.PlayOrder();
+                        }
+                    }
+                }
+
+                float maxAllyAggro = 0.0f;
+                for (const auto& ally : allies) {
+                    if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
+                }
+                bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
+
+                const WeaponStats& wStats = weapon.GetCurrentStats();
+                bool triggerPulled = wStats.isAutomatic
+                    ? IsMouseButtonDown(MOUSE_BUTTON_LEFT)
+                    : IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+                if (triggerPulled) {
+                    if (weapon.CanFire()) {
+                        weapon.ConsumeAndAnimateFire();
+                        audio.PlayWeaponAction(wStats.id, isStealthFlank);
+
+                        if (!player.isDowned && !enemies.empty()) {
+                            player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnFire);
+                        }
+
+                        if (wStats.isGrenade) {
+                            bool isFlash = (wStats.id == WeaponId::GADGET_FLASH);
+                            Vector3 spawnPos = Vector3Add(eyePos, Vector3Scale(forward, 0.65f));
+                            Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
+                            throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
+                            grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                        } else {
+                            Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(listenerRight, 0.24f), { 0, -0.18f, 0 }));
+
+                            bool anyHit = false;
+                            bool anyHeadshot = false;
+                            bool anyWallbang = false;
+                            bool anyKill = false;
+                            bool hitBarrel = false;
+
+                            for (int p = 0; p < wStats.pelletCount; p++) {
+                                Vector3 shotDir = ApplySpreadToDirection(forward, wStats.spread);
+                                Ray ray = { eyePos, shotDir };
+
+                                BallisticHitResult hitRes = TraceBallisticShot(ray, wStats.range, wStats.penetrationPower, world, enemies);
+                                float shotDist = Vector3Distance(eyePos, hitRes.endPoint);
+
+                                int barrelIdx = mission.CheckBarrelShot(ray, shotDist);
+                                if (barrelIdx != -1) {
+                                    RayCollision bCol = GetRayCollisionBox(ray, mission.barrels[barrelIdx].GetAABB());
+                                    if (!wStats.isMelee) {
+                                        tracers.push_back({ muzzlePos, bCol.point, ORANGE, 0.085f });
+                                        net.QueueEvent(NetEventType::SHOT_TRACER, 0, muzzlePos, bCol.point, isStealthFlank ? 1 : 0);
+                                    }
+                                    mission.DamageBarrel(barrelIdx, wStats.damage, explosions);
+                                    anyHit = true;
+                                    hitBarrel = true;
+                                    continue;
+                                }
+
                                 if (!wStats.isMelee) {
-                                    tracers.push_back({ muzzlePos, bCol.point, ORANGE, 0.085f });
+                                    Color shotColor = isStealthFlank ? SKYBLUE : (hitRes.didWallbang ? ORANGE : wStats.accentColor);
+                                    tracers.push_back({ muzzlePos, hitRes.endPoint, shotColor, 0.085f });
+                                    net.QueueEvent(NetEventType::SHOT_TRACER, 0, muzzlePos, hitRes.endPoint, isStealthFlank ? 1 : 0);
+
+                                    if (hitRes.hasPiercePoint) {
+                                        Vector3 sparkEnd = Vector3Add(hitRes.piercePoint, Vector3Scale(shotDir, 0.45f));
+                                        tracers.push_back({ hitRes.piercePoint, sparkEnd, WHITE, 0.14f });
+                                    }
                                 }
-                                mission.DamageBarrel(barrelIdx, wStats.damage, explosions);
-                                anyHit = true;
-                                hitBarrel = true;
-                                continue;
+
+                                if (hitRes.hitEnemyIdx != -1) {
+                                    EnemyBot& targetEnemy = enemies[hitRes.hitEnemyIdx];
+                                    bool wasAlive = targetEnemy.IsAlive();
+
+                                    float stateMult = isStealthFlank ? 2.0f : (player.isDowned ? 0.65f : 1.0f);
+                                    float finalDamage = wStats.damage * hitRes.damageMultiplier * stateMult;
+
+                                    targetEnemy.hp -= finalDamage;
+                                    targetEnemy.suppression = std::min(100.0f, targetEnemy.suppression + wStats.suppressionOnHit);
+
+                                    if (!player.isDowned) {
+                                        player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnHit);
+                                    }
+
+                                    anyHit = true;
+                                    if (hitRes.isHeadshot) {
+                                        anyHeadshot = true;
+                                        mission.stats.headshotsLanded++;
+                                    }
+                                    if (hitRes.didWallbang) anyWallbang = true;
+                                    if (wasAlive && !targetEnemy.IsAlive()) {
+                                        anyKill = true;
+                                        mission.stats.enemiesEliminated++;
+                                    }
+                                }
                             }
 
-                            if (!wStats.isMelee) {
-                                Color shotColor = isStealthFlank ? SKYBLUE : (hitRes.didWallbang ? ORANGE : wStats.accentColor);
-                                tracers.push_back({ muzzlePos, hitRes.endPoint, shotColor, 0.085f });
-
-                                if (hitRes.hasPiercePoint) {
-                                    Vector3 sparkEnd = Vector3Add(hitRes.piercePoint, Vector3Scale(shotDir, 0.45f));
-                                    tracers.push_back({ hitRes.piercePoint, sparkEnd, WHITE, 0.14f });
+                            if (anyHit) {
+                                hitmarker.timer = hitmarker.maxDuration;
+                                if (anyKill) {
+                                    hitmarker.color = RED;
+                                    hitmarker.callout = anyHeadshot ? "HEADSHOT! ABATE" : (anyWallbang ? "WALLBANG! ABATE" : "ELIMINADO");
+                                } else if (anyHeadshot) {
+                                    hitmarker.color = GOLD;
+                                    hitmarker.callout = anyWallbang ? "WALLBANG HEADSHOT! (2.5x)" : "HEADSHOT! (2.5x)";
+                                } else if (hitBarrel) {
+                                    hitmarker.color = ORANGE;
+                                    hitmarker.callout = "BARRIL EXPLOSIVO!";
+                                } else if (anyWallbang) {
+                                    hitmarker.color = ORANGE;
+                                    hitmarker.callout = "WALLBANG!";
+                                } else {
+                                    hitmarker.color = RAYWHITE;
+                                    hitmarker.callout = "";
                                 }
                             }
+                        }
+                    } else if (!weapon.isReloading && !wStats.isMelee && !wStats.isGrenade && weapon.GetCurrentAmmo() <= 0) {
+                        if (weapon.StartReload()) {
+                            audio.PlayReload();
+                        }
+                    }
+                }
 
-                            if (hitRes.hitEnemyIdx != -1) {
-                                EnemyBot& targetEnemy = enemies[hitRes.hitEnemyIdx];
-                                bool wasAlive = targetEnemy.IsAlive();
+                size_t prevExplosions = explosions.size();
+                UpdateGrenades(dt, grenades, explosions, world);
 
-                                float stateMult = isStealthFlank ? 2.0f : (player.isDowned ? 0.65f : 1.0f);
-                                float finalDamage = wStats.damage * hitRes.damageMultiplier * stateMult;
+                for (size_t e = prevExplosions; e < explosions.size(); e++) {
+                    const ExplosionEffect exp = explosions[e];
+                    audio.PlayExplosion3D(exp.pos, exp.isFlashbang);
+                    net.QueueEvent(NetEventType::EXPLOSION, 0, exp.pos, exp.pos, exp.isFlashbang ? 1 : 0);
+                    mission.CheckExplosionChain(exp, explosions);
 
-                                targetEnemy.hp -= finalDamage;
-                                targetEnemy.suppression = std::min(100.0f, targetEnemy.suppression + wStats.suppressionOnHit);
-
-                                if (!player.isDowned) {
-                                    player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnHit);
-                                }
-
-                                anyHit = true;
-                                if (hitRes.isHeadshot) {
-                                    anyHeadshot = true;
-                                    mission.stats.headshotsLanded++;
-                                }
-                                if (hitRes.didWallbang) anyWallbang = true;
-                                if (wasAlive && !targetEnemy.IsAlive()) {
-                                    anyKill = true;
+                    bool nadeHit = false;
+                    bool nadeKill = false;
+                    for (auto& enemy : enemies) {
+                        if (!enemy.IsAlive()) continue;
+                        float dist = Vector3Distance(enemy.GetEyePos(), exp.pos);
+                        if (dist <= exp.maxRadius) {
+                            float falloff = 1.0f - (dist / exp.maxRadius) * 0.5f;
+                            if (exp.isFlashbang) {
+                                enemy.hp -= 5.0f;
+                                enemy.suppression = 100.0f;
+                                enemy.isSuppressed = true;
+                                enemy.coverSearchTimer = 0.0f;
+                                player.aggro = std::max(0.0f, player.aggro - 20.0f);
+                                nadeHit = true;
+                            } else {
+                                enemy.hp -= 115.0f * falloff;
+                                enemy.suppression = 100.0f;
+                                enemy.isSuppressed = true;
+                                nadeHit = true;
+                                if (!enemy.IsAlive()) {
+                                    nadeKill = true;
                                     mission.stats.enemiesEliminated++;
                                 }
                             }
                         }
+                    }
+                    if (nadeHit) {
+                        hitmarker.timer = 0.25f;
+                        hitmarker.color = nadeKill ? RED : ORANGE;
+                        hitmarker.callout = nadeKill ? "EXPLOSAO! ABATE" : (exp.isFlashbang ? "INIMIGO CEGADO!" : "DANO EM AREA");
+                    }
+                }
 
-                        if (anyHit) {
-                            hitmarker.timer = hitmarker.maxDuration;
-                            if (anyKill) {
-                                hitmarker.color = RED;
-                                hitmarker.callout = anyHeadshot ? "HEADSHOT! ABATE" : (anyWallbang ? "WALLBANG! ABATE" : "ELIMINADO");
-                            } else if (anyHeadshot) {
-                                hitmarker.color = GOLD;
-                                hitmarker.callout = anyWallbang ? "WALLBANG HEADSHOT! (2.5x)" : "HEADSHOT! (2.5x)";
-                            } else if (hitBarrel) {
-                                hitmarker.color = ORANGE;
-                                hitmarker.callout = "BARRIL EXPLOSIVO!";
-                            } else if (anyWallbang) {
-                                hitmarker.color = ORANGE;
-                                hitmarker.callout = "WALLBANG!";
-                            } else {
-                                hitmarker.color = RAYWHITE;
-                                hitmarker.callout = "";
+                grenades.erase(
+                    std::remove_if(grenades.begin(), grenades.end(), [](const ThrownGrenade& g) { return g.exploded; }),
+                    grenades.end()
+                );
+                for (size_t i = 0; i < explosions.size(); ) {
+                    explosions[i].timer -= dt;
+                    if (explosions[i].timer <= 0.0f) explosions.erase(explosions.begin() + i);
+                    else i++;
+                }
+
+                for (size_t i = 0; i < damageIndicators.size(); ) {
+                    damageIndicators[i].timer -= dt;
+                    if (damageIndicators[i].timer <= 0.0f) damageIndicators.erase(damageIndicators.begin() + i);
+                    else i++;
+                }
+
+                if (!player.isDowned && !enemies.empty()) {
+                    bool playerExposed = false;
+                    for (const auto& enemy : enemies) {
+                        if (enemy.IsAlive() && HasLineOfSight(enemy.GetEyePos(), eyePos, world)) {
+                            playerExposed = true;
+                            break;
+                        }
+                    }
+                    float decayRate = playerExposed ? 6.5f : 15.0f;
+                    player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
+                }
+
+                bool prevPlayerDowned = player.isDowned;
+                std::vector<bool> prevAllyDowned(allies.size(), false);
+                for (size_t i = 0; i < allies.size(); i++) {
+                    prevAllyDowned[i] = allies[i].isDowned;
+                }
+
+                size_t prevTracers = tracers.size();
+
+                if (!allies.empty() || !enemies.empty()) {
+                    UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
+
+                    if (net.IsHost()) {
+                        // Remove eventuais tiros disparados por IA em slots controlados por humanos
+                        for (size_t t = prevTracers; t < tracers.size(); ) {
+                            bool fromHuman = false;
+                            for (int idx = 0; idx < 3 && idx < (int)allies.size(); idx++) {
+                                if (savedHumanSlot[idx] && Vector3Distance(tracers[t].start, allies[idx].GetEyePos()) < 1.1f) {
+                                    fromHuman = true;
+                                    break;
+                                }
+                            }
+                            if (fromHuman) tracers.erase(tracers.begin() + t);
+                            else t++;
+                        }
+
+                        for (int idx = 0; idx < 3 && idx < (int)allies.size(); idx++) {
+                            if (savedHumanSlot[idx]) {
+                                allies[idx].pos = savedHumanPos[idx];
+                                allies[idx].anchorPos = savedHumanPos[idx];
+                                allies[idx].isSuppressed = savedHumanCrouched[idx];
+                                allies[idx].hasPingOrder = false;
                             }
                         }
                     }
-                } else if (!weapon.isReloading && !wStats.isMelee && !wStats.isGrenade && weapon.GetCurrentAmmo() <= 0) {
-                    if (weapon.StartReload()) {
-                        audio.PlayReload();
-                    }
+
+                    UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
                 }
-            }
 
-            size_t prevExplosions = explosions.size();
-            UpdateGrenades(dt, grenades, explosions, world);
+                for (size_t t = prevTracers; t < tracers.size(); t++) {
+                    bool isEnemyShot = (tracers[t].color.r > 180 && tracers[t].color.b < 80);
+                    SfxId shotSfx = isEnemyShot ? SfxId::RIFLE : SfxId::LMG;
+                    float pitch = isEnemyShot ? 0.93f : 1.07f;
+                    audio.Play3D(shotSfx, tracers[t].start, 0.68f, pitch, 48.0f);
+                    net.QueueEvent(NetEventType::SHOT_TRACER, isEnemyShot ? 99 : 1, tracers[t].start, tracers[t].end);
+                }
 
-            for (size_t e = prevExplosions; e < explosions.size(); e++) {
-                const ExplosionEffect exp = explosions[e];
-                audio.PlayExplosion3D(exp.pos, exp.isFlashbang);
-                mission.CheckExplosionChain(exp, explosions);
-
-                bool nadeHit = false;
-                bool nadeKill = false;
-                for (auto& enemy : enemies) {
-                    if (!enemy.IsAlive()) continue;
-                    float dist = Vector3Distance(enemy.GetEyePos(), exp.pos);
-                    if (dist <= exp.maxRadius) {
-                        float falloff = 1.0f - (dist / exp.maxRadius) * 0.5f;
-                        if (exp.isFlashbang) {
-                            enemy.hp -= 5.0f;
-                            enemy.suppression = 100.0f;
-                            enemy.isSuppressed = true;
-                            enemy.coverSearchTimer = 0.0f;
-                            player.aggro = std::max(0.0f, player.aggro - 20.0f);
-                            nadeHit = true;
-                        } else {
-                            enemy.hp -= 115.0f * falloff;
-                            enemy.suppression = 100.0f;
-                            enemy.isSuppressed = true;
-                            nadeHit = true;
-                            if (!enemy.IsAlive()) {
-                                nadeKill = true;
-                                mission.stats.enemiesEliminated++;
-                            }
+                botStepTimer += dt;
+                if (botStepTimer >= 0.45f) {
+                    botStepTimer = 0.0f;
+                    for (const auto& ally : allies) {
+                        if (!ally.isDowned && Vector3Distance(ally.pos, ally.anchorPos) > 0.65f) {
+                            audio.PlayFootstep3D(ally.pos, 0.32f);
                         }
                     }
                 }
-                if (nadeHit) {
-                    hitmarker.timer = 0.25f;
-                    hitmarker.color = nadeKill ? RED : ORANGE;
-                    hitmarker.callout = nadeKill ? "EXPLOSAO! ABATE" : (exp.isFlashbang ? "INIMIGO CEGADO!" : "DANO EM AREA");
+
+                if (!prevPlayerDowned && player.isDowned) {
+                    audio.PlayDownedAlert();
+                } else if (prevPlayerDowned && !player.isDowned) {
+                    audio.PlayRevive();
                 }
-            }
 
-            grenades.erase(
-                std::remove_if(grenades.begin(), grenades.end(), [](const ThrownGrenade& g) { return g.exploded; }),
-                grenades.end()
-            );
-            for (size_t i = 0; i < explosions.size(); ) {
-                explosions[i].timer -= dt;
-                if (explosions[i].timer <= 0.0f) explosions.erase(explosions.begin() + i);
-                else i++;
-            }
-
-            for (size_t i = 0; i < damageIndicators.size(); ) {
-                damageIndicators[i].timer -= dt;
-                if (damageIndicators[i].timer <= 0.0f) damageIndicators.erase(damageIndicators.begin() + i);
-                else i++;
-            }
-
-            if (!player.isDowned && !enemies.empty()) {
-                bool playerExposed = false;
-                for (const auto& enemy : enemies) {
-                    if (enemy.IsAlive() && HasLineOfSight(enemy.GetEyePos(), eyePos, world)) {
-                        playerExposed = true;
+                for (size_t i = 0; i < allies.size(); i++) {
+                    if (!prevAllyDowned[i] && allies[i].isDowned) {
+                        audio.PlayDownedAlert();
                         break;
                     }
                 }
-                float decayRate = playerExposed ? 6.5f : 15.0f;
-                player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
             }
+            // =================================================================
+            // RAMO B: CLIENTE LAN (ENVIA INPUTS E APLICA SNAPSHOT DO HOST)
+            // =================================================================
+            else {
+                weapon.Update(dt, mouseDelta, horizSpeed, player.isGrounded);
+                camera.position = eyePos;
+                camera.target = Vector3Add(eyePos, forward);
 
-            bool prevPlayerDowned = player.isDowned;
-            std::vector<bool> prevAllyDowned(allies.size(), false);
-            for (size_t i = 0; i < allies.size(); i++) {
-                prevAllyDowned[i] = allies[i].isDowned;
-            }
+                if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) && !player.isDowned) {
+                    net.QueueClientPing();
+                    audio.PlayOrder();
+                }
 
-            size_t prevTracers = tracers.size();
-
-            if (!allies.empty() || !enemies.empty()) {
-                UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
-                UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
-            }
-
-            for (size_t t = prevTracers; t < tracers.size(); t++) {
-                bool isEnemyShot = (tracers[t].color.r > 180 && tracers[t].color.b < 80);
-                SfxId shotSfx = isEnemyShot ? SfxId::RIFLE : SfxId::LMG;
-                float pitch = isEnemyShot ? 0.93f : 1.07f;
-                audio.Play3D(shotSfx, tracers[t].start, 0.68f, pitch, 48.0f);
-            }
-
-            botStepTimer += dt;
-            if (botStepTimer >= 0.45f) {
-                botStepTimer = 0.0f;
+                float maxAllyAggro = 0.0f;
                 for (const auto& ally : allies) {
-                    if (!ally.isDowned && Vector3Distance(ally.pos, ally.anchorPos) > 0.65f) {
-                        audio.PlayFootstep3D(ally.pos, 0.32f);
+                    if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
+                }
+                bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
+
+                const WeaponStats& wStats = weapon.GetCurrentStats();
+                bool triggerPulled = wStats.isAutomatic
+                    ? IsMouseButtonDown(MOUSE_BUTTON_LEFT)
+                    : IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+
+                if (triggerPulled) {
+                    if (weapon.CanFire()) {
+                        weapon.ConsumeAndAnimateFire();
+                        audio.PlayWeaponAction(wStats.id, isStealthFlank);
+
+                        if (wStats.isGrenade) {
+                            bool isFlash = (wStats.id == WeaponId::GADGET_FLASH);
+                            Vector3 spawnPos = Vector3Add(eyePos, Vector3Scale(forward, 0.65f));
+                            Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
+                            throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
+                            grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                            net.QueueClientGrenade(isFlash, spawnPos, throwVel);
+                        } else {
+                            Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(listenerRight, 0.24f), { 0, -0.18f, 0 }));
+                            BallisticHitResult previewHit = TraceBallisticShot({ eyePos, forward }, wStats.range, wStats.penetrationPower, world, enemies);
+                            if (!wStats.isMelee) {
+                                Color shotColor = isStealthFlank ? SKYBLUE : wStats.accentColor;
+                                tracers.push_back({ muzzlePos, previewHit.endPoint, shotColor, 0.085f });
+                            }
+                            if (previewHit.hitEnemyIdx != -1) {
+                                hitmarker.timer = hitmarker.maxDuration;
+                                hitmarker.color = previewHit.isHeadshot ? GOLD : RAYWHITE;
+                                hitmarker.callout = previewHit.isHeadshot ? "HEADSHOT!" : "";
+                            }
+                            net.QueueClientFire(wStats.id, wStats.isMelee, eyePos, forward);
+                        }
+                    } else if (!weapon.isReloading && !wStats.isMelee && !wStats.isGrenade && weapon.GetCurrentAmmo() <= 0) {
+                        if (weapon.StartReload()) {
+                            audio.PlayReload();
+                        }
                     }
                 }
-            }
 
-            if (!prevPlayerDowned && player.isDowned) {
-                audio.PlayDownedAlert();
-            } else if (prevPlayerDowned && !player.isDowned) {
-                audio.PlayRevive();
-            }
-
-            for (size_t i = 0; i < allies.size(); i++) {
-                if (!prevAllyDowned[i] && allies[i].isDowned) {
-                    audio.PlayDownedAlert();
-                    break;
+                UpdateGrenades(dt, grenades, explosions, world);
+                grenades.erase(
+                    std::remove_if(grenades.begin(), grenades.end(), [](const ThrownGrenade& g) { return g.exploded; }),
+                    grenades.end()
+                );
+                for (size_t i = 0; i < explosions.size(); ) {
+                    explosions[i].timer -= dt;
+                    if (explosions[i].timer <= 0.0f) explosions.erase(explosions.begin() + i);
+                    else i++;
                 }
+
+                net.SendClientInput(dt, player, weapon.currentSlot, IsKeyDown(KEY_F));
             }
 
             for (size_t i = 0; i < tracers.size(); ) {
@@ -684,6 +1016,185 @@ int main() {
             Vector3 camFwd = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
             Vector3 camRight = Vector3Normalize(Vector3CrossProduct(camFwd, camera.up));
             audio.UpdateListener(camera.position, camFwd, camRight);
+        }
+
+        // =====================================================================
+        // SINCRONIZAÇÃO DE REDE (HOST EMPACOTA SNAPSHOT / CLIENTE APLICA)
+        // =====================================================================
+        if (net.IsHost()) {
+            NetWorldSnapshotPacket snap = {};
+            snap.phase = (uint8_t)saveSystem.data.selectedPhase;
+            snap.missionState = (uint8_t)mission.state;
+            snap.currentOrder = (uint8_t)currentOrder;
+            snap.extractionActive = mission.extraction.isActive ? 1 : 0;
+            snap.tick = ++hostSnapshotTick;
+            snap.extractionProgress = ReadExtractionProgress(mission.extraction);
+            snap.missionTimer = ReadMissionTimer(mission);
+
+            uint8_t mask = 1;
+            for (int s = 1; s <= 3; s++) {
+                if (net.clientSlots[s].connected) mask |= (1 << s);
+            }
+            snap.connectedMask = mask;
+
+            // Slot 0: Host (Alpha)
+            snap.squad[0].posX = player.pos.x;
+            snap.squad[0].posY = player.pos.y;
+            snap.squad[0].posZ = player.pos.z;
+            snap.squad[0].yaw = player.yaw;
+            snap.squad[0].pitch = player.pitch;
+            snap.squad[0].hp = player.hp;
+            snap.squad[0].aggro = player.aggro;
+            snap.squad[0].suppression = 0.0f;
+            snap.squad[0].bleedoutTimer = std::max(0.0f, 25.0f - mission.playerDownedTimer);
+            snap.squad[0].reviveProgress = player.reviveProgress;
+            snap.squad[0].weaponSlot = (uint8_t)weapon.currentSlot;
+            snap.squad[0].flags = (1 << 0)
+                                | (player.isCrouched ? (1 << 1) : 0)
+                                | (player.isDowned ? (1 << 2) : 0);
+
+            // Slots 1..3: Bravo, Charlie, Delta
+            for (int s = 1; s <= 3 && (s - 1) < (int)allies.size(); s++) {
+                const SquadAlly& a = allies[s - 1];
+                snap.squad[s].posX = a.pos.x;
+                snap.squad[s].posY = a.pos.y;
+                snap.squad[s].posZ = a.pos.z;
+                snap.squad[s].hp = a.hp;
+                snap.squad[s].aggro = a.aggro;
+                snap.squad[s].suppression = a.suppression;
+                snap.squad[s].bleedoutTimer = a.bleedoutTimer;
+                snap.squad[s].reviveProgress = a.reviveProgress;
+                snap.squad[s].flags = (net.clientSlots[s].connected ? (1 << 0) : 0)
+                                    | (a.isSuppressed ? (1 << 1) : 0)
+                                    | (a.isDowned ? (1 << 2) : 0)
+                                    | (a.isSuppressed ? (1 << 3) : 0)
+                                    | (a.hasPingOrder ? (1 << 4) : 0);
+            }
+
+            // Inimigos
+            int eCount = std::min((int)enemies.size(), NetWorldSnapshotPacket::MAX_ENEMIES);
+            snap.enemyCount = (uint8_t)eCount;
+            for (int i = 0; i < eCount; i++) {
+                snap.enemies[i].id = (int16_t)enemies[i].id;
+                snap.enemies[i].currentTargetId = (int16_t)enemies[i].currentTargetId;
+                snap.enemies[i].posX = enemies[i].pos.x;
+                snap.enemies[i].posY = enemies[i].pos.y;
+                snap.enemies[i].posZ = enemies[i].pos.z;
+                snap.enemies[i].hp = enemies[i].hp;
+                snap.enemies[i].maxHp = enemies[i].maxHp;
+                snap.enemies[i].suppression = enemies[i].suppression;
+                snap.enemies[i].flags = (enemies[i].IsAlive() ? (1 << 0) : 0)
+                                      | (enemies[i].isSuppressed ? (1 << 1) : 0);
+            }
+
+            // Terminais e Barris
+            int tCount = std::min((int)mission.terminals.size(), NetWorldSnapshotPacket::MAX_TERMINALS);
+            snap.terminalCount = (uint8_t)tCount;
+            for (int i = 0; i < tCount; i++) {
+                snap.terminals[i].progress = mission.terminals[i].progress;
+                snap.terminals[i].hacked = mission.terminals[i].isHacked ? 1 : 0;
+            }
+
+            int bCount = std::min((int)mission.barrels.size(), NetWorldSnapshotPacket::MAX_BARRELS);
+            snap.barrelCount = (uint8_t)bCount;
+            for (int i = 0; i < bCount; i++) {
+                snap.barrels[i].hp = mission.barrels[i].hp;
+                snap.barrels[i].exploded = mission.barrels[i].exploded ? 1 : 0;
+            }
+
+            // Eventos recentes (tiros e explosões)
+            int evCount = std::min((int)net.outgoingEvents.size(), NetWorldSnapshotPacket::MAX_EVENTS);
+            snap.eventCount = (uint8_t)evCount;
+            for (int i = 0; i < evCount; i++) {
+                snap.events[i] = net.outgoingEvents[net.outgoingEvents.size() - evCount + i];
+            }
+
+            net.SendHostSnapshot(dt, snap);
+        } else if (net.IsClient() && net.hasSnapshot) {
+            const NetWorldSnapshotPacket& snap = net.latestSnapshot;
+
+            if ((SquadOrder)snap.currentOrder != currentOrder) {
+                currentOrder = (SquadOrder)snap.currentOrder;
+                orderBannerTimer = 2.0f;
+                audio.PlayOrder();
+            }
+
+            mission.state = (MissionState)snap.missionState;
+            mission.extraction.isActive = (snap.extractionActive != 0);
+            WriteExtractionProgress(mission.extraction, snap.extractionProgress);
+            WriteMissionTimer(mission, snap.missionTimer);
+
+            if (net.localSlot >= 1 && net.localSlot <= 3) {
+                const NetSquadMemberState& myNet = snap.squad[net.localSlot];
+                bool wasDown = player.isDowned;
+                player.hp = myNet.hp;
+                player.aggro = myNet.aggro;
+                player.isDowned = (myNet.flags & (1 << 2)) != 0;
+                player.reviveProgress = myNet.reviveProgress;
+                mission.playerDownedTimer = 25.0f - myNet.bleedoutTimer;
+
+                if (!wasDown && player.isDowned) audio.PlayDownedAlert();
+                else if (wasDown && !player.isDowned) audio.PlayRevive();
+            }
+
+            int allyIdx = 0;
+            for (int s = 0; s < 4 && allyIdx < (int)allies.size(); s++) {
+                if (s == net.localSlot) continue;
+                const NetSquadMemberState& st = snap.squad[s];
+                SquadAlly& a = allies[allyIdx++];
+                a.pos = { st.posX, st.posY, st.posZ };
+                a.anchorPos = a.pos;
+                a.hp = st.hp;
+                a.aggro = st.aggro;
+                a.suppression = st.suppression;
+                a.bleedoutTimer = st.bleedoutTimer;
+                a.reviveProgress = st.reviveProgress;
+                a.isDowned = (st.flags & (1 << 2)) != 0;
+                a.isSuppressed = ((st.flags & (1 << 1)) != 0) || ((st.flags & (1 << 3)) != 0);
+                a.hasPingOrder = (st.flags & (1 << 4)) != 0;
+            }
+
+            if ((int)enemies.size() != (int)snap.enemyCount) {
+                enemies.resize(snap.enemyCount);
+            }
+            for (int i = 0; i < (int)snap.enemyCount; i++) {
+                const NetEnemyState& ne = snap.enemies[i];
+                enemies[i].id = ne.id;
+                enemies[i].currentTargetId = ne.currentTargetId;
+                enemies[i].pos = { ne.posX, ne.posY, ne.posZ };
+                enemies[i].hp = ne.hp;
+                enemies[i].maxHp = ne.maxHp;
+                enemies[i].suppression = ne.suppression;
+                enemies[i].isSuppressed = (ne.flags & (1 << 1)) != 0;
+            }
+
+            for (int i = 0; i < (int)snap.terminalCount && i < (int)mission.terminals.size(); i++) {
+                mission.terminals[i].progress = snap.terminals[i].progress;
+                mission.terminals[i].isHacked = (snap.terminals[i].hacked != 0);
+            }
+            for (int i = 0; i < (int)snap.barrelCount && i < (int)mission.barrels.size(); i++) {
+                mission.barrels[i].hp = snap.barrels[i].hp;
+                mission.barrels[i].exploded = (snap.barrels[i].exploded != 0);
+            }
+
+            for (int i = 0; i < (int)snap.eventCount; i++) {
+                const NetWorldEvent& ev = snap.events[i];
+                if (ev.eventId <= net.lastProcessedEventId) continue;
+                net.lastProcessedEventId = ev.eventId;
+
+                if (ev.type == (uint8_t)NetEventType::SHOT_TRACER && ev.sourceSlot != (uint8_t)net.localSlot) {
+                    Vector3 sPos = { ev.startX, ev.startY, ev.startZ };
+                    Vector3 ePos = { ev.endX, ev.endY, ev.endZ };
+                    Color col = (ev.sourceSlot == 99) ? RED : ((ev.extra != 0) ? SKYBLUE : GOLD);
+                    tracers.push_back({ sPos, ePos, col, 0.09f });
+                    audio.Play3D((ev.sourceSlot == 99) ? SfxId::RIFLE : SfxId::LMG, sPos, 0.65f, 1.0f, 48.0f);
+                } else if (ev.type == (uint8_t)NetEventType::EXPLOSION) {
+                    Vector3 expPos = { ev.startX, ev.startY, ev.startZ };
+                    bool isFlash = (ev.extra != 0);
+                    explosions.push_back({ expPos, isFlash, 0.45f, 0.45f, isFlash ? 8.5f : 6.0f });
+                    audio.PlayExplosion3D(expPos, isFlash);
+                }
+            }
         }
 
         // Atualiza Trilha Sonora Dinâmica
@@ -738,7 +1249,7 @@ int main() {
                     if (enemy.currentTargetId != -1) {
                         Vector3 targetAim = (enemy.currentTargetId == 0)
                             ? Vector3Subtract(eyePos, { 0, 0.3f, 0 })
-                            : allies[enemy.currentTargetId - 1].GetEyePos();
+                            : allies[std::min((int)allies.size() - 1, std::max(0, enemy.currentTargetId - 1))].GetEyePos();
 
                         Color aggroLineColor = (enemy.currentTargetId == 0)
                             ? Fade(RED, 0.65f)
@@ -830,12 +1341,13 @@ int main() {
                     DrawText("1-5: Armas | Shift: Correr | F5: Reiniciar | F6: Cutscene | F7: Reload | ESC: Menu",
                              20, altura - 26, 14, LIGHTGRAY);
                 } else {
-                    if (tacticalPing.type == PingType::MOVE_COVER) {
+                    if (tacticalPing.type == PingType::MOVE_COVER && !allies.empty()) {
                         Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
                         if (Vector3DotProduct(forward, Vector3Subtract(beaconTop, eyePos)) > 0.0f) {
                             Vector2 pScreen = GetWorldToScreen(beaconTop, camera);
                             if (pScreen.x > 0 && pScreen.x < largura && pScreen.y > 0 && pScreen.y < altura) {
-                                const char* pingTag = TextFormat("COBERTURA [%s]", allies[tacticalPing.assignedAllyId - 1].name.c_str());
+                                int aIdx = std::clamp(tacticalPing.assignedAllyId - 1, 0, (int)allies.size() - 1);
+                                const char* pingTag = TextFormat("COBERTURA [%s]", allies[aIdx].name.c_str());
                                 DrawText(pingTag, (int)pScreen.x - MeasureText(pingTag, 13) / 2, (int)pScreen.y - 16, 13, SKYBLUE);
                             }
                         }
@@ -942,13 +1454,22 @@ int main() {
                         : (isStealthFlank ? "FURTIVO (2x DANO NOS FLANCOS)" : ((player.aggro > 65.0f) ? "AGGRO MAXIMO" : "AMEACA MODERADA"));
                     DrawText(statusText, cx - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
 
-                    DrawText(TextFormat("ESQUADRAO [FASE 0%d]:", saveSystem.data.selectedPhase), 20, 20, 16, WHITE);
-                    DrawText(TextFormat("Voce (Alpha): HP %.0f | Aggro %.0f%% %s", player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
+                    const char* netBadge = net.IsHost()
+                        ? TextFormat("ESQUADRAO [LAN HOST %s - %d/4]:", net.detectedLocalIp.c_str(), net.GetConnectedPlayerCount())
+                        : (net.IsClient()
+                            ? TextFormat("ESQUADRAO [LAN CLIENTE %s - %d/4]:", LanNetworkManager::GetSlotCallsign(net.localSlot), net.GetConnectedPlayerCount())
+                            : TextFormat("ESQUADRAO [FASE 0%d]:", saveSystem.data.selectedPhase));
+                    DrawText(netBadge, 20, 20, 16, net.IsActive() ? SKYBLUE : WHITE);
+
+                    const char* myTag = net.IsClient() ? LanNetworkManager::GetSlotCallsign(net.localSlot) : "Alpha";
+                    DrawText(TextFormat("Voce (%s): HP %.0f | Aggro %.0f%% %s", myTag, player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
                              20, 44, 16, player.isDowned ? RED : aggroBarColor);
 
                     for (size_t i = 0; i < allies.size(); i++) {
                         const auto& a = allies[i];
-                        const char* tagExtra = a.isSuppressed ? "[SUPRIMIDO]" : (a.hasPingOrder ? "[PING: COBERTURA]" : "");
+                        int globalSlot = net.IsClient() ? ((int)i >= net.localSlot ? (int)i + 1 : (int)i) : ((int)i + 1);
+                        const char* ctrlTag = net.IsActive() ? (net.IsSlotHuman(globalSlot) ? "[JOGADOR]" : "[BOT]") : "";
+                        const char* tagExtra = a.isSuppressed ? "[SUPRIMIDO]" : (a.hasPingOrder ? "[PING: COBERTURA]" : ctrlTag);
                         const char* allyLine = a.isDowned
                             ? TextFormat("%s: [CAIDO - %.0fs]", a.name.c_str(), a.bleedoutTimer)
                             : TextFormat("%s: HP %.0f | Aggro %.0f%% %s", a.name.c_str(), a.hp, a.aggro, tagExtra);
@@ -965,7 +1486,7 @@ int main() {
                     DrawText(TextFormat("[M] Som: %s | Trilha: %.0f%%", audio.muted ? "MUDO" : "3D ON", audio.musicTension * 100.0f),
                              cmdX, 134, 14, audio.muted ? RED : (audio.musicTension > 0.55f ? ORANGE : GREEN));
 
-                    DrawText("1-5: Armas | F1-F3: Ordens | E/F: Interagir | F5: Reiniciar | F6: Cutscene | F8: Triggers | ESC: Menu",
+                    DrawText("1-5: Armas | F1-F3: Ordens | E/F: Interagir | F5: Reiniciar | F8: Triggers | ESC: Menu",
                              20, altura - 26, 13, LIGHTGRAY);
                 }
 
@@ -1029,6 +1550,7 @@ int main() {
         EndDrawing();
     }
 
+    net.Shutdown();
     saveSystem.Save();
     assets.Shutdown();
     audio.Shutdown();

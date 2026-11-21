@@ -138,20 +138,15 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Cutscene.hpp`: Classe `CutsceneManager` com trilhos de câmera suaves via interpolação `SmootherStep` (posição, alvo e FOV), barras *letterbox* animadas, legendas táticas sincronizadas por *keyframe* com botão de pular (`[ESPAÇO]`), e *Trigger Zones* (`BoundingBox`) no cenário para disparos automáticos de eventos (introdução da missão, avanço no pátio central e aproximação da extração).
   - Controles de desenvolvimento: `[F6]` para disparar a cutscene de demonstração manualmente e `[F8]` para alternar a visualização 3D das *Trigger Zones*.
 
-### [SAVEPOINT_18 — ATUAL] Menu de Loadout, Configurações & Save Persistente (`SaveSystem.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+### [SAVEPOINT_18] Menu de Loadout, Configurações & Save Persistente (`SaveSystem.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
 - **Status:** Implementado e modularizado (`SaveSystem.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `SaveSystem.hpp`: Persistência automática em `savegame.cfg` (`chave=valor`) com loadout escolhido, sensibilidade do mouse, FOV base, volumes de SFX/Música, desbloqueio progressivo de fases (Fases 1 a 3) e estatísticas acumuladas (missões concluídas, abates totais e *headshots*).
   - `Menu.hpp`: Tela de **Briefing & Loadout** (seleção de fase desbloqueada, arma primária, secundária e gadget prioritário) e tela de **Configurações & Save** com sliders arrastáveis pelo mouse ou setas do teclado e botões de salvar/restaurar/zerar progresso.
   
-[SAVEPOINT_19] Multiplayer LAN (Host / Cliente via UDP)
-
-    Arquivos: Network.hpp (novo), Menu.hpp, main.cpp
-
-    O que resolve: Permitir que até 4 jogadores entrem na mesma partida na rede local assumindo o controle de Alpha, Bravo, Charlie e Delta (substituindo os bots conforme entram).
-
-    Mecânicas:
-
-        Arquitetura Host-Autoritativo: Um jogador cria a sala (Host) e os outros conectam pelo IP local usando sockets UDP não-bloqueantes (ou biblioteca ENet).
-
-        Replicação de Estado: Pacotes compactos sincronizando posição, rotação (yaw/pitch), estado (agachado/caído), disparos, granadas lançadas e ordens do líder.
+### [SAVEPOINT_19 — ATUAL] Multiplayer LAN (Host / Cliente via UDP) (`Network.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`Network.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `Network.hpp`: Classe `LanNetworkManager` com sockets UDP não-bloqueantes nativos do Linux (porta `27015`), detecção automática do IPv4 local (`getifaddrs`), arquitetura **Host-Autoritativo** (`NetClientInputPacket` e `NetWorldSnapshotPacket`), fila de eventos de rede (`SHOT_TRACER`, `EXPLOSION`) e timeout/reassunção automática por bots de IA.
+  - `Menu.hpp`: Tela de **Lobby Multiplayer LAN** (`MenuScreen::LAN_LOBBY`) com formação de 4 slots (`Alpha`, `Bravo`, `Charlie`, `Delta`), criação de servidor Host, campo de IP editável e suporte a *drop-in* durante a partida.
+  - `main.cpp`: Replicação completa de movimento, disparos, granadas, pings táticos, reanimação cooperativa (`[F]`), inimigos e progresso dos terminais/extração.

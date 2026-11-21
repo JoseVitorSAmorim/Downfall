@@ -7,7 +7,7 @@ INCLUDES = -I. -I$(RAYLIB_PATH)
 LDFLAGS = -L$(RAYLIB_PATH) -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 
 SRC = main.cpp
-HEADERS = World.hpp Player.hpp Weapon.hpp SquadAI.hpp Menu.hpp Audio.hpp
+HEADERS = World.hpp Player.hpp Weapon.hpp SquadAI.hpp Menu.hpp Audio.hpp Objectives.hpp MapEditor.hpp
 
 all: $(TARGET)
 
@@ -20,4 +20,4 @@ run: $(TARGET)
 clean:
 	rm -f $(TARGET)
 
-.PHONY: all run clean 
+.PHONY: all run clean

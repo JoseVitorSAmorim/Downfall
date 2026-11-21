@@ -108,29 +108,17 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Weapon.hpp`: Atributo `penetrationPower` (`LMG: 1.65m`, `Revólver: 1.35m`, `Rifle: 1.05m`), interseção exata entrada/saída (`IntersectRayBoxInterval`) e `TraceBallisticShot` aplicando `2.5x` em acertos na cabeça e atenuação proporcional ao atravessar coberturas finas.
   - `main.cpp`: Hitmarker diagonal na mira por categoria (**Branco** = corpo, **Laranja** = *wallbang*, **Dourado** = *headshot*, **Vermelho** = abate) e arco direcional vermelho indicando de qual direção veio o disparo recebido.
 
-[SAVEPOINT_13] Objetos Interativos, Objetivos e Loop de Missão
+### [SAVEPOINT_13] Objetos Interativos & Loop de Missão (`Objectives.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`Objectives.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `Objectives.hpp`: Structs `ExplosiveBarrel` (detonação por tiro e reação em cadeia), `AmmoCrate` (reabastecimento de munição/granadas + cura de `25 HP` com tecla `F` e recarga de `12s`), `HackTerminal` (invasão segurando `F` que gera `Aggro`), `ExtractionZone` e classe `MissionManager`.
+  - **Loop de Missão:** 3 etapas no modo Combate Tático (`HACK_TERMINALS` → `CLEAR_HOSTILES` com reforços inimigos → `EXTRACT_SQUAD`), tela modal de **Vitória / Derrota** com estatísticas (tempo, abates, headshots, terminais, barris) e modo `SANDBOX` livre no Estande de Tiro.
 
-    Arquivos: Objectives.hpp (novo), World.hpp, main.cpp
-
-    O que resolve: As partidas atuais não têm condição de vitória, derrota ou objetivos além de eliminar ondas com T.
-
-    Mecânicas:
-
-        Elementos de Cenário: Portas destrutíveis/abríveis, barris explosivos, caixas de reabastecimento (munição e granadas) e terminais de hack/captura de zona.
-
-        Estrutura de Fase: Objetivos sequenciais (ex.: Invadir ponto A → Hackear terminal → Extrair na zona segura), tela de Missão Concluída / Esquadrão Eliminado e pontuação tática.
-
-[SAVEPOINT_14] Editor de Mapas In-Game (MapEditor.hpp)
-
-    Arquivos: MapEditor.hpp (novo), World.hpp, Menu.hpp
-
-    O que resolve: Construir fases editando coordenadas X/Y/Z manualmente no .txt é lento.
-
-    Mecânicas:
-
-        Modo Construção no Menu: Câmera livre (noclip), grade magnética (snap-to-grid), criação, redimensionamento e pintura de blocos em tempo real.
-
-        Marcadores Lógicos: Posicionamento visual de spawns do esquadrão, spawns de inimigos, caixas de munição e zonas de objetivo, exportando direto para arquivos .txt compatíveis com o LevelLoader.
+### [SAVEPOINT_14 — ATUAL] Editor de Mapas In-Game (`MapEditor.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`MapEditor.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `MapEditor.hpp`: Classe `InGameMapEditor` com câmera livre (*noclip*), grade magnética (`G`: `0.25m`–`2.00m`), modos `BUILD` e `EDIT` (`TAB`), colocação/remoção de blocos por raycast, redimensionamento (`J/L`, `U/O`, `I/K`), movimentação (`Setas` + `PgUp/PgDn`), duplicação (`V`), paleta de 8 cores (`1`–`8` e `P`), histórico de desfazer (`Z`) e exportação direta para `.txt` (`F5`) compatível com `LevelLoader`.
+  - `Menu.hpp` & `main.cpp`: Nova opção `[4] EDITOR DE MAPAS IN-GAME` (`GameMode::MAP_EDITOR`).
 
 [SAVEPOINT_15] Suporte a Modelos 3D do Blender & Animações Esqueléticas
 

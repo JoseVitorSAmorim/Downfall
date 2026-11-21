@@ -1,90 +1,56 @@
 #pragma once
 
 #include "raylib.h"
-#include <vector>
-#include <string>
+#include <array>
 
 enum class GameMode {
     MAIN_MENU,
-    TACTICAL_SQUAD,
     MOVEMENT_TEST,
     SUPPRESSION_RANGE,
+    SQUAD_ARENA,
+    MAP_EDITOR,
     EXIT_GAME
-};
-
-struct MenuOption {
-    GameMode mode;
-    std::string title;
-    std::string description;
-    Color accent;
 };
 
 class MainMenu {
 public:
     int selectedIndex = 0;
 
-    std::vector<MenuOption> options = {
-        {
-            GameMode::TACTICAL_SQUAD,
-            "1. COMBATE TATICO (ESQUADRAO 4x4 & AGGRO)",
-            "Arena completa com 3 aliados, inimigos com cobertura, supressao, arrasto (E) e ordens (1/2/3).",
-            ORANGE
-        },
-        {
-            GameMode::MOVEMENT_TEST,
-            "2. PISTA DE MOVIMENTACAO (SOURCE PHYSICS)",
-            "Circuito de parkour para testar Bunny Hop, Air Strafe, Sprint (Shift) e Crouch-Jump (Espaco+Ctrl).",
-            SKYBLUE
-        },
-        {
-            GameMode::SUPPRESSION_RANGE,
-            "3. ESTANDE DE TIRO & FLANCO FURTIVO",
-            "Campo de treino com barreiras para testar recuo, dano furtivo (2x) e comportamento da IA.",
-            LIME
-        },
-        {
-            GameMode::EXIT_GAME,
-            "4. SAIR DO PROTOTIPO",
-            "Encerra a aplicacao e fecha a janela.",
-            RED
-        }
-    };
-
     GameMode Update(int screenWidth, int screenHeight) {
-        // Navegação por teclado
+        const int optionCount = 5;
+
         if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
-            selectedIndex = (selectedIndex + 1) % (int)options.size();
+            selectedIndex = (selectedIndex + 1) % optionCount;
         }
         if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
-            selectedIndex = (selectedIndex - 1 + (int)options.size()) % (int)options.size();
-        }
-        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
-            return options[selectedIndex].mode;
+            selectedIndex = (selectedIndex - 1 + optionCount) % optionCount;
         }
 
-        // Atalhos diretos numéricos (1 a 4)
-        if (IsKeyPressed(KEY_ONE))   return options[0].mode;
-        if (IsKeyPressed(KEY_TWO))   return options[1].mode;
-        if (IsKeyPressed(KEY_THREE)) return options[2].mode;
-        if (IsKeyPressed(KEY_FOUR))  return options[3].mode;
-
-        // Navegação e clique com o Mouse
         Vector2 mouse = GetMousePosition();
-        int cardW = 760;
-        int cardH = 82;
+        int cardW = 540;
+        int cardH = 66;
         int startX = screenWidth / 2 - cardW / 2;
-        int startY = 210;
-        int spacing = 96;
+        int startY = 175;
 
-        for (size_t i = 0; i < options.size(); i++) {
-            Rectangle cardRect = { (float)startX, (float)(startY + (int)i * spacing), (float)cardW, (float)cardH };
-            if (CheckCollisionPointRec(mouse, cardRect)) {
-                selectedIndex = (int)i;
+        for (int i = 0; i < optionCount; i++) {
+            Rectangle rect = { (float)startX, (float)(startY + i * 78), (float)cardW, (float)cardH };
+            if (CheckCollisionPointRec(mouse, rect)) {
+                selectedIndex = i;
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    return options[i].mode;
+                    return IndexToMode(i);
                 }
             }
         }
+
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
+            return IndexToMode(selectedIndex);
+        }
+
+        if (IsKeyPressed(KEY_ONE))   return GameMode::SQUAD_ARENA;
+        if (IsKeyPressed(KEY_TWO))   return GameMode::SUPPRESSION_RANGE;
+        if (IsKeyPressed(KEY_THREE)) return GameMode::MOVEMENT_TEST;
+        if (IsKeyPressed(KEY_FOUR))  return GameMode::MAP_EDITOR;
+        if (IsKeyPressed(KEY_FIVE))  return GameMode::EXIT_GAME;
 
         return GameMode::MAIN_MENU;
     }
@@ -92,48 +58,56 @@ public:
     void Draw(int screenWidth, int screenHeight) const {
         ClearBackground({ 16, 19, 26, 255 });
 
-        // Grade decorativa sutil no fundo
-        for (int x = 0; x < screenWidth; x += 40) {
-            DrawLine(x, 0, x, screenHeight, Fade(WHITE, 0.03f));
-        }
-        for (int y = 0; y < screenHeight; y += 40) {
-            DrawLine(0, y, screenWidth, y, Fade(WHITE, 0.03f));
-        }
+        const char* title = "SQUAD TACTICAL SHOOTER";
+        const char* subtitle = "Prototipo Modular - SAVEPOINT_14 (Editor de Mapas In-Game)";
+        DrawText(title, screenWidth / 2 - MeasureText(title, 38) / 2, 65, 38, WHITE);
+        DrawText(subtitle, screenWidth / 2 - MeasureText(subtitle, 17) / 2, 112, 17, SKYBLUE);
 
-        // Cabeçalho
-        const char* title = "SQUAD TACTICAL ENGINE // SANDBOX";
-        const char* subtitle = "Selecione um ambiente de teste abaixo (Mouse, Setas+Enter ou Teclas 1-4)";
-        DrawText(title, screenWidth / 2 - MeasureText(title, 36) / 2, 70, 36, WHITE);
-        DrawText(subtitle, screenWidth / 2 - MeasureText(subtitle, 18) / 2, 120, 18, LIGHTGRAY);
+        struct MenuOption {
+            const char* label;
+            const char* desc;
+            Color accent;
+        };
 
-        DrawLine(screenWidth / 2 - 380, 160, screenWidth / 2 + 380, 160, Fade(SKYBLUE, 0.4f));
+        const std::array<MenuOption, 5> options = {{
+            { "[1] MISSAO TATICA DE ESQUADRAO", "Hackear terminais, suprimir, flanquear e extrair (mapa_squad.txt)", GREEN },
+            { "[2] ESTANDE DE TIRO & SUPRESSAO", "Sandbox livre com barris explosivos e caixas de municao", ORANGE },
+            { "[3] PISTA DE MOVIMENTACAO (SOURCE)", "Teste de Bunny Hop, Air Strafe e Crouch-Jump", SKYBLUE },
+            { "[4] EDITOR DE MAPAS IN-GAME", "Construir, redimensionar, pintar e salvar mapas 3D em .txt", GOLD },
+            { "[5] SAIR DO JOGO", "Encerrar aplicacao", RED }
+        }};
 
-        // Cartões de seleção
-        int cardW = 760;
-        int cardH = 82;
+        int cardW = 540;
+        int cardH = 66;
         int startX = screenWidth / 2 - cardW / 2;
-        int startY = 210;
-        int spacing = 96;
+        int startY = 175;
 
-        for (size_t i = 0; i < options.size(); i++) {
-            bool isSelected = ((int)i == selectedIndex);
-            int y = startY + (int)i * spacing;
+        for (int i = 0; i < 5; i++) {
+            bool active = (selectedIndex == i);
+            int y = startY + i * 78;
 
-            Color bgCol = isSelected ? Color{ 32, 38, 50, 255 } : Color{ 23, 27, 36, 255 };
-            Color borderCol = isSelected ? options[i].accent : Fade(GRAY, 0.35f);
+            Color bg = active ? Color{ 32, 38, 52, 255 } : Color{ 22, 26, 35, 255 };
+            Color border = active ? options[i].accent : Color{ 60, 68, 82, 255 };
 
-            DrawRectangle(startX, y, cardW, cardH, bgCol);
-            DrawRectangleLinesEx({ (float)startX, (float)y, (float)cardW, (float)cardH }, isSelected ? 2.5f : 1.0f, borderCol);
+            DrawRectangle(startX, y, cardW, cardH, bg);
+            DrawRectangleLinesEx({ (float)startX, (float)y, (float)cardW, (float)cardH }, active ? 2.5f : 1.0f, border);
 
-            // Faixa lateral colorida
-            DrawRectangle(startX, y, 8, cardH, options[i].accent);
-
-            DrawText(options[i].title.c_str(), startX + 24, y + 16, 20, isSelected ? WHITE : LIGHTGRAY);
-            DrawText(options[i].description.c_str(), startX + 24, y + 46, 15, isSelected ? SKYBLUE : GRAY);
+            DrawText(options[i].label, startX + 18, y + 12, 19, active ? options[i].accent : WHITE);
+            DrawText(options[i].desc, startX + 18, y + 38, 14, LIGHTGRAY);
         }
 
-        // Rodapé informativo
-        const char* footer = "SAVEPOINT_08 | Dentro de qualquer teste, pressione [ESC] para retornar a este menu";
-        DrawText(footer, screenWidth / 2 - MeasureText(footer, 16) / 2, screenHeight - 40, 16, GRAY);
+        const char* footer = "Use Setas / W-S ou Mouse para navegar  |  ENTER ou Clique para confirmar";
+        DrawText(footer, screenWidth / 2 - MeasureText(footer, 15) / 2, screenHeight - 36, 15, GRAY);
+    }
+
+private:
+    static GameMode IndexToMode(int idx) {
+        switch (idx) {
+            case 0: return GameMode::SQUAD_ARENA;
+            case 1: return GameMode::SUPPRESSION_RANGE;
+            case 2: return GameMode::MOVEMENT_TEST;
+            case 3: return GameMode::MAP_EDITOR;
+            default: return GameMode::EXIT_GAME;
+        }
     }
 };

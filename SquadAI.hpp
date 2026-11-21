@@ -17,9 +17,9 @@ enum class SquadOrder {
 
 inline const char* GetOrderLabel(SquadOrder order) {
     switch (order) {
-        case SquadOrder::ADVANCE:  return "[1] AVANCAR";
-        case SquadOrder::HOLD:     return "[2] MANTER POSICAO";
-        case SquadOrder::SUPPRESS: return "[3] FOGO DE SUPRESSAO (PUXAR AGGRO)";
+        case SquadOrder::ADVANCE:  return "[F1] AVANCAR";
+        case SquadOrder::HOLD:     return "[F2] MANTER POSICAO";
+        case SquadOrder::SUPPRESS: return "[F3] FOGO DE SUPRESSAO (PUXAR AGGRO)";
     }
     return "";
 }

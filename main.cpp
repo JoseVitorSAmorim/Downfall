@@ -6,10 +6,15 @@
 #include "Audio.hpp"
 
 void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePlayer& player,
-                        std::vector<SquadAlly>& allies, std::vector<EnemyBot>& enemies,
-                        std::vector<Tracer>& tracers, SquadOrder& currentOrder) {
+                        ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
+                        std::vector<EnemyBot>& enemies, std::vector<Tracer>& tracers,
+                        std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
+                        SquadOrder& currentOrder) {
     player = SourcePlayer();
+    weapon = ViewmodelWeapon();
     tracers.clear();
+    grenades.clear();
+    explosions.clear();
     allies.clear();
     enemies.clear();
     currentOrder = SquadOrder::HOLD;
@@ -38,10 +43,19 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     }
 }
 
+// Calcula direção com dispersão aleatória para balins da escopeta e rajadas
+Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
+    if (spread <= 0.0f) return dir;
+    float rx = ((float)GetRandomValue(-1000, 1000) / 1000.0f) * spread;
+    float ry = ((float)GetRandomValue(-1000, 1000) / 1000.0f) * spread;
+    float rz = ((float)GetRandomValue(-1000, 1000) / 1000.0f) * spread;
+    return Vector3Normalize({ dir.x + rx, dir.y + ry, dir.z + rz });
+}
+
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Audio Procedural (SAVEPOINT_09)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Arsenal & Binds (SAVEPOINT_10)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -58,6 +72,8 @@ int main() {
     std::vector<SquadAlly> allies;
     std::vector<EnemyBot> enemies;
     std::vector<Tracer> tracers;
+    std::vector<ThrownGrenade> grenades;
+    std::vector<ExplosionEffect> explosions;
 
     SquadOrder currentOrder = SquadOrder::HOLD;
     float orderBannerTimer = 0.0f;
@@ -91,7 +107,7 @@ int main() {
                 continue;
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
-                InitializeTestMode(currentMode, world, player, allies, enemies, tracers, currentOrder);
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder);
                 audio.PlayOrder();
                 DisableCursor();
             }
@@ -115,30 +131,53 @@ int main() {
 
         if (orderBannerTimer > 0.0f) orderBannerTimer -= dt;
 
-        if (IsKeyPressed(KEY_R)) {
-            InitializeTestMode(currentMode, world, player, allies, enemies, tracers, currentOrder);
+        // Reiniciar cenário completo com F5
+        if (IsKeyPressed(KEY_F5)) {
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder);
             audio.PlayOrder();
         }
 
+        // Resetar onda de inimigos com T
         if (IsKeyPressed(KEY_T) && currentMode != GameMode::MOVEMENT_TEST) {
             ResetWave(enemies);
             audio.PlayOrder();
         }
 
-        // Comandos Táticos de Esquadrão (1, 2 e 3)
+        // =====================================================================
+        // SELEÇÃO DE ARMAS (TECLAS 1 A 5 + RODA DO MOUSE) E RECARGA (R)
+        // =====================================================================
+        if (IsKeyPressed(KEY_ONE))   weapon.SelectSlot(1);
+        if (IsKeyPressed(KEY_TWO))   weapon.SelectSlot(2);
+        if (IsKeyPressed(KEY_THREE)) weapon.SelectSlot(3);
+        if (IsKeyPressed(KEY_FOUR))  weapon.SelectSlot(4);
+        if (IsKeyPressed(KEY_FIVE))  weapon.SelectSlot(5);
+
+        float wheel = GetMouseWheelMove();
+        if (wheel > 0.0f) weapon.CycleNextWeapon(-1);
+        else if (wheel < 0.0f) weapon.CycleNextWeapon(1);
+
+        if (IsKeyPressed(KEY_R)) {
+            if (weapon.StartReload()) {
+                audio.PlayReload();
+            }
+        }
+
+        // =====================================================================
+        // COMANDOS TÁTICOS DE ESQUADRAO (F1, F2 e F3)
+        // =====================================================================
         if (!player.isDowned && !allies.empty()) {
-            if (IsKeyPressed(KEY_ONE)) {
+            if (IsKeyPressed(KEY_F1)) {
                 currentOrder = SquadOrder::ADVANCE;
                 orderBannerTimer = 2.2f;
                 audio.PlayOrder();
-            } else if (IsKeyPressed(KEY_TWO)) {
+            } else if (IsKeyPressed(KEY_F2)) {
                 currentOrder = SquadOrder::HOLD;
                 orderBannerTimer = 2.2f;
                 audio.PlayOrder();
                 for (auto& ally : allies) {
                     if (!ally.isDowned) ally.anchorPos = ally.pos;
                 }
-            } else if (IsKeyPressed(KEY_THREE)) {
+            } else if (IsKeyPressed(KEY_F3)) {
                 currentOrder = SquadOrder::SUPPRESS;
                 orderBannerTimer = 2.2f;
                 audio.PlayOrder();
@@ -148,7 +187,6 @@ int main() {
             }
         }
 
-        // Detecta salto do jogador para disparar o som de pulo
         bool wasGrounded = player.isGrounded;
         Vector2 mouseDelta = GetMouseDelta();
         player.UpdateLook(mouseDelta, 0.0022f);
@@ -235,42 +273,113 @@ int main() {
         }
         bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
 
-        // Disparo do Jogador
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-            weapon.TriggerFire();
-            audio.PlayShoot(isStealthFlank);
+        // =====================================================================
+        // DISPARO / GOLPE / LANÇAMENTO DE GADGET
+        // =====================================================================
+        const WeaponStats& wStats = weapon.GetCurrentStats();
+        bool triggerPulled = wStats.isAutomatic
+            ? IsMouseButtonDown(MOUSE_BUTTON_LEFT)
+            : IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 
-            if (!player.isDowned && !enemies.empty()) {
-                player.aggro = std::min(100.0f, player.aggro + 12.0f);
-            }
+        if (triggerPulled) {
+            if (weapon.CanFire()) {
+                weapon.ConsumeAndAnimateFire();
+                audio.PlayWeaponAction(wStats.id, isStealthFlank);
 
-            Ray ray = { eyePos, forward };
-            float hitDist = GetClosestWallDistance(ray, world, 80.0f);
-            int hitEnemyIdx = -1;
+                if (!player.isDowned && !enemies.empty()) {
+                    player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnFire);
+                }
 
-            for (size_t i = 0; i < enemies.size(); i++) {
-                if (!enemies[i].IsAlive()) continue;
-                RayCollision col = GetRayCollisionBox(ray, enemies[i].GetAABB());
-                if (col.hit && col.distance < hitDist) {
-                    hitDist = col.distance;
-                    hitEnemyIdx = (int)i;
+                if (wStats.isGrenade) {
+                    // Lança Granada de Fragmentação ou Flashbang
+                    bool isFlash = (wStats.id == WeaponId::GADGET_FLASH);
+                    Vector3 spawnPos = Vector3Add(eyePos, Vector3Scale(forward, 0.65f));
+                    Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
+                    throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
+                    grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                } else {
+                    // Armas de fogo (balins múltiplos para escopeta) e arma branca
+                    Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
+                    Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(right, 0.24f), { 0, -0.18f, 0 }));
+
+                    for (int p = 0; p < wStats.pelletCount; p++) {
+                        Vector3 shotDir = ApplySpreadToDirection(forward, wStats.spread);
+                        Ray ray = { eyePos, shotDir };
+                        float hitDist = GetClosestWallDistance(ray, world, wStats.range);
+                        int hitEnemyIdx = -1;
+
+                        for (size_t i = 0; i < enemies.size(); i++) {
+                            if (!enemies[i].IsAlive()) continue;
+                            RayCollision col = GetRayCollisionBox(ray, enemies[i].GetAABB());
+                            if (col.hit && col.distance < hitDist) {
+                                hitDist = col.distance;
+                                hitEnemyIdx = (int)i;
+                            }
+                        }
+
+                        if (!wStats.isMelee) {
+                            Vector3 endPoint = Vector3Add(eyePos, Vector3Scale(shotDir, hitDist));
+                            Color shotColor = isStealthFlank ? SKYBLUE : wStats.accentColor;
+                            tracers.push_back({ muzzlePos, endPoint, shotColor, 0.08f });
+                        }
+
+                        if (hitEnemyIdx != -1) {
+                            float mult = isStealthFlank ? 2.0f : (player.isDowned ? 0.65f : 1.0f);
+                            enemies[hitEnemyIdx].hp -= wStats.damage * mult;
+                            enemies[hitEnemyIdx].suppression = std::min(100.0f, enemies[hitEnemyIdx].suppression + wStats.suppressionOnHit);
+
+                            if (!player.isDowned) {
+                                player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnHit);
+                            }
+                        }
+                    }
+                }
+            } else if (!weapon.isReloading && !wStats.isMelee && !wStats.isGrenade && weapon.GetCurrentAmmo() <= 0) {
+                if (weapon.StartReload()) {
+                    audio.PlayReload();
                 }
             }
+        }
 
-            Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
-            Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(right, 0.24f), { 0, -0.18f, 0 }));
-            Vector3 endPoint = Vector3Add(eyePos, Vector3Scale(forward, hitDist));
+        // Atualiza granadas lançadas e aplica efeito da explosão nos inimigos
+        size_t prevExplosions = explosions.size();
+        UpdateGrenades(dt, grenades, explosions, world);
 
-            Color shotColor = isStealthFlank ? SKYBLUE : GOLD;
-            tracers.push_back({ muzzlePos, endPoint, shotColor, 0.09f });
+        for (size_t e = prevExplosions; e < explosions.size(); e++) {
+            const ExplosionEffect& exp = explosions[e];
+            audio.PlayExplosion(exp.isFlashbang);
 
-            if (hitEnemyIdx != -1) {
-                float damage = isStealthFlank ? 70.0f : (player.isDowned ? 22.0f : 35.0f);
-                enemies[hitEnemyIdx].hp -= damage;
-                if (!player.isDowned) {
-                    player.aggro = std::min(100.0f, player.aggro + 18.0f);
+            for (auto& enemy : enemies) {
+                if (!enemy.IsAlive()) continue;
+                float dist = Vector3Distance(enemy.GetEyePos(), exp.pos);
+                if (dist <= exp.maxRadius) {
+                    float falloff = 1.0f - (dist / exp.maxRadius) * 0.5f;
+                    if (exp.isFlashbang) {
+                        // Flashbang suprime instantaneamente e reduz o Aggro do jogador
+                        enemy.hp -= 5.0f;
+                        enemy.suppression = 100.0f;
+                        enemy.isSuppressed = true;
+                        enemy.coverSearchTimer = 0.0f;
+                        player.aggro = std::max(0.0f, player.aggro - 20.0f);
+                    } else {
+                        // Fragmentação causa dano alto em área
+                        enemy.hp -= 115.0f * falloff;
+                        enemy.suppression = 100.0f;
+                        enemy.isSuppressed = true;
+                    }
                 }
             }
+        }
+
+        // Limpa granadas detonadas e efeitos expirados
+        grenades.erase(
+            std::remove_if(grenades.begin(), grenades.end(), [](const ThrownGrenade& g) { return g.exploded; }),
+            grenades.end()
+        );
+        for (size_t i = 0; i < explosions.size(); ) {
+            explosions[i].timer -= dt;
+            if (explosions[i].timer <= 0.0f) explosions.erase(explosions.begin() + i);
+            else i++;
         }
 
         // Decaimento natural do Aggro
@@ -286,7 +395,7 @@ int main() {
             player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
         }
 
-        // Monitora mudanças de estado DOWNED para disparar alertas sonoros
+        // Atualização da IA e alertas sonoros de queda/reanimação
         bool prevPlayerDowned = player.isDowned;
         std::vector<bool> prevAllyDowned(allies.size(), false);
         for (size_t i = 0; i < allies.size(); i++) {
@@ -317,7 +426,9 @@ int main() {
             else i++;
         }
 
-        // Renderização 3D
+        // =====================================================================
+        // RENDERIZAÇÃO 3D
+        // =====================================================================
         BeginDrawing();
             ClearBackground({ 20, 23, 30, 255 });
 
@@ -372,6 +483,20 @@ int main() {
                     }
                 }
 
+                // Desenha granadas lançadas e explosões
+                for (const auto& g : grenades) {
+                    DrawSphere(g.pos, 0.16f, g.isFlashbang ? SKYBLUE : DARKGREEN);
+                    DrawSphereWires(g.pos, 0.17f, 6, 6, g.isFlashbang ? WHITE : RED);
+                }
+
+                for (const auto& exp : explosions) {
+                    float progress = 1.0f - (exp.timer / exp.maxDuration);
+                    float curRadius = exp.maxRadius * (0.25f + 0.75f * progress);
+                    float alpha = (1.0f - progress) * 0.55f;
+                    Color expCol = exp.isFlashbang ? Fade(WHITE, alpha) : Fade(ORANGE, alpha);
+                    DrawSphere(exp.pos, curRadius, expCol);
+                }
+
                 for (const auto& t : tracers) {
                     DrawLine3D(t.start, t.end, t.color);
                 }
@@ -380,7 +505,7 @@ int main() {
             EndMode3D();
 
             // =================================================================
-            // HUD ESPECÍFICO POR MODO DE TESTE
+            // HUD 2D
             // =================================================================
             if (currentMode == GameMode::MOVEMENT_TEST) {
                 float unitsPerSec = horizSpeed * 50.0f;
@@ -392,9 +517,9 @@ int main() {
                 DrawText(TextFormat("Posicao: X=%.1f  Y=%.2f  Z=%.1f", player.pos.x, player.pos.y, player.pos.z), 20, 46, 16, LIGHTGRAY);
                 DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
 
-                DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), largura / 2 - 120, altura - 85, 26, speedColor);
-                DrawText("Shift: Correr | Espaco+A/D: Bhop | Espaco+Ctrl: Crouch-Jump | M: Mudo | R: Reiniciar | ESC: Menu",
-                         20, altura - 30, 15, LIGHTGRAY);
+                DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), largura / 2 - 120, altura - 115, 26, speedColor);
+                DrawText("1-5: Armas/Gadgets | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | ESC: Menu",
+                         20, altura - 26, 15, LIGHTGRAY);
             } else {
                 for (const auto& ally : allies) {
                     float headOffset = ally.isDowned ? 1.2f : (ally.isSuppressed ? 1.6f : 2.15f);
@@ -473,7 +598,7 @@ int main() {
                     }
                 } else if (player.draggingAllyId != -1) {
                     const char* dragMsg = TextFormat("ARRASTANDO %s PARA COBERTURA (PODE ATIRAR!)", allies[player.draggingAllyId - 1].name.c_str());
-                    DrawText(dragMsg, largura / 2 - MeasureText(dragMsg, 18) / 2, altura - 110, 18, YELLOW);
+                    DrawText(dragMsg, largura / 2 - MeasureText(dragMsg, 18) / 2, altura - 135, 18, YELLOW);
                 }
 
                 int barW = 320;
@@ -500,18 +625,52 @@ int main() {
                     DrawText(allyLine, 20, 68 + (int)i * 22, 15, lineColor);
                 }
 
+                // Painel de Ordens Táticas (F1, F2, F3)
                 int cmdX = largura - 340;
                 DrawText("COMANDOS DO ESQUADRAO:", cmdX, 20, 16, WHITE);
-                DrawText("[1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
-                DrawText("[2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
-                DrawText("[3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
-
+                DrawText("[F1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
+                DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
+                DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
                 DrawText(audio.muted ? "[M] Som: MUDO" : "[M] Som: ATIVO", cmdX, 114, 14, audio.muted ? RED : GREEN);
 
-                DrawText("1/2/3: Ordens | E: Arrastar | F: Reanimar | T: Resetar Inimigos | R: Reiniciar | ESC: Menu", 20, altura - 30, 15, LIGHTGRAY);
+                DrawText("1-5: Armas/Gadgets | R: Recarregar | E: Arrastar | F: Reanimar | T: Resetar Inimigos | F5: Reiniciar | ESC: Menu",
+                         20, altura - 26, 14, LIGHTGRAY);
             }
 
-            DrawCircleLines(largura / 2, altura / 2, 5, isStealthFlank ? SKYBLUE : GREEN);
+            // =================================================================
+            // BARRA DE ARSENAL E MUNIÇÃO (SLOTS 1 A 5 - INFERIOR DIREITO)
+            // =================================================================
+            int hudW = 330;
+            int hudH = 82;
+            int hudX = largura - hudW - 20;
+            int hudY = altura - hudH - 42;
+
+            DrawRectangle(hudX, hudY, hudW, hudH, Color{ 18, 22, 30, 215 });
+            DrawRectangleLinesEx({ (float)hudX, (float)hudY, (float)hudW, (float)hudH }, 1.5f, wStats.accentColor);
+
+            // Indicador dos 5 slots no topo da caixa
+            const char* slotNames[5] = { "[1] PRIM", "[2] SEC", "[3] FACA", "[4] FRAG", "[5] FLASH" };
+            for (int s = 1; s <= 5; s++) {
+                bool active = (weapon.currentSlot == s);
+                DrawText(slotNames[s - 1], hudX + 10 + (s - 1) * 63, hudY + 8, 12, active ? wStats.accentColor : GRAY);
+            }
+
+            DrawText(wStats.name, hudX + 12, hudY + 28, 19, WHITE);
+
+            if (weapon.isReloading) {
+                DrawText("RECARREGANDO...", hudX + 12, hudY + 54, 15, YELLOW);
+            } else if (wStats.isMelee) {
+                DrawText("CORPO A CORPO (SILENCIOSO)", hudX + 12, hudY + 54, 14, LIME);
+            } else {
+                const char* ammoTxt = TextFormat("MUNICAO: %d / %d", weapon.GetCurrentAmmo(), wStats.magSize);
+                DrawText(ammoTxt, hudX + 12, hudY + 54, 15, (weapon.GetCurrentAmmo() == 0) ? RED : LIGHTGRAY);
+
+                if (weapon.currentSlot == 1 || weapon.currentSlot == 2) {
+                    DrawText(TextFormat("[Aperte %d p/ trocar]", weapon.currentSlot), hudX + 185, hudY + 55, 12, SKYBLUE);
+                }
+            }
+
+            DrawCircleLines(largura / 2, altura / 2, (wStats.id == WeaponId::SHOTGUN) ? 14.0f : 5.0f, isStealthFlank ? SKYBLUE : GREEN);
         EndDrawing();
     }
 

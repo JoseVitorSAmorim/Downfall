@@ -83,7 +83,13 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Menu.hpp`: Enum `GameMode` (`MAIN_MENU`, `TACTICAL_SQUAD`, `MOVEMENT_TEST`, `SUPPRESSION_RANGE`, `EXIT_GAME`) e classe `MainMenu` com navegação via mouse, setas+Enter e atalhos `1`–`4`.
   - `World.hpp`: Enum `MapPreset` (`SQUAD_ARENA`, `MOVEMENT_COURSE`, `FIRING_RANGE`) gerando automaticamente `mapa_squad.txt`, `mapa_movimento.txt` e `mapa_treino.txt`.
   - `main.cpp`: Máquina de estados com `SetExitKey(KEY_NULL)` permitindo voltar ao menu a qualquer momento com `ESC` e reiniciar o cenário atual com `R`.
-### [SAVEPOINT_09 — ATUAL] Áudio Procedural em Memória (`Audio.hpp`)
+### [SAVEPOINT_09] Áudio Procedural em Memória (`Audio.hpp`)
 - **Status:** Implementado e modularizado (`Audio.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `Audio.hpp`: Classe `ProceduralAudio` sintetizando buffers PCM 16-bit/44.1kHz via `MemAlloc` e `LoadSoundFromWave` sem arquivos externos (`sfxShootNormal`, `sfxShootStealth`, `sfxJump`, `sfxOrder`, `sfxDowned`, `sfxRevive`), com variação dinâmica de pitch (`SetSoundPitch`), verificação `IsAudioDeviceReady()` e tecla `M` para alternar mudo.
+### [SAVEPOINT_10 — ATUAL] Arsenal Completo (1–5), Granadas Físicas & Binds F1–F3
+- **Status:** Implementado e modularizado (`Weapon.hpp`, `Audio.hpp`, `SquadAI.hpp`, `main.cpp`).
+- **Adicionado:**
+  - `Weapon.hpp`: Enum `WeaponId` com 8 equipamentos distribuídos em 5 slots (`1`: Rifle, Escopeta, LMG; `2`: Pistola, Revólver; `3`: Faca Tática; `4`: Granada Frag; `5`: Granada Flashbang), alternância de sub-armas apertando `1` ou `2` novamente, recarga na tecla `R` e struct `ThrownGrenade` com física de rebote AABB e detonação em área.
+  - `Audio.hpp`: Efeitos sonoros procedurais específicos por categoria (`sfxShootShotgun`, `sfxShootHeavy`, `sfxMelee`, `sfxExplosion`, `sfxReload`).
+  - `SquadAI.hpp` & `main.cpp`: Comandos de esquadrão movidos para `F1` (Avançar), `F2` (Manter Posição) e `F3` (Fogo de Supressão); reset de cenário movido para `F5`.

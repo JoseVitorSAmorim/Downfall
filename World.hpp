@@ -25,7 +25,7 @@ struct WorldBlock {
     Vector3 size = { 1.0f, 1.0f, 1.0f };
     Color color = GRAY;
     BoundingBox bounds = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f } };
-    int slopeDir = 0; // 0 = Caixa AABB padrão, 1..4 = Rampa inclinada (SlopeDir)
+    int slopeDir = 0; // 0 = Caixa retangular padrão, 1..4 = Rampa inclinada
 
     bool IsSlope() const noexcept {
         return slopeDir >= 1 && slopeDir <= 4;
@@ -46,7 +46,6 @@ struct WorldBlock {
         return ComputeBounds();
     }
 
-    // Retorna a altura exata da superfície inclinada no ponto (x, z)
     float GetSurfaceYAt(float x, float z) const noexcept {
         BoundingBox bb = GetAABB();
         if (!IsSlope()) return bb.max.y;
@@ -80,7 +79,6 @@ struct WorldBlock {
         return bb.min.y + t * (bb.max.y - bb.min.y);
     }
 
-    // Maior altura da rampa sob uma AABB de personagem
     float GetMaxSurfaceUnderBox(const BoundingBox& actorBox) const noexcept {
         BoundingBox bb = GetAABB();
         if (!IsSlope()) return bb.max.y;
@@ -100,8 +98,8 @@ struct WorldBlock {
     }
 };
 
-// Renderiza blocos comuns ou cunhas 3D inclinadas (rampas)
 inline void DrawWorldBlock(const WorldBlock& block) {
+    // Coberturas e blocos comuns são sempre renderizados como cubos retangulares
     if (!block.IsSlope()) {
         DrawCubeV(block.pos, block.size, block.color);
         DrawCubeWiresV(block.pos, block.size, BLACK);
@@ -113,7 +111,6 @@ inline void DrawWorldBlock(const WorldBlock& block) {
     float y0 = bb.min.y, y1 = bb.max.y;
     float z0 = bb.min.z, z1 = bb.max.z;
 
-    // Define os 4 cantos da base e os 2 cantos elevados da rampa conforme a direção
     Vector3 b00 = { x0, y0, z0 };
     Vector3 b10 = { x1, y0, z0 };
     Vector3 b11 = { x1, y0, z1 };
@@ -128,23 +125,17 @@ inline void DrawWorldBlock(const WorldBlock& block) {
     };
 
     switch (static_cast<SlopeDir>(block.slopeDir)) {
-        case SlopeDir::POS_X: {
-            tA = { x1, y1, z0 };
-            tB = { x1, y1, z1 };
-            // Rampa inclinada (-X -> +X)
+        case SlopeDir::POS_X:
+            tA = { x1, y1, z0 }; tB = { x1, y1, z1 };
             DrawTriangle3D(b00, b01, tB, block.color);
             DrawTriangle3D(b00, tB, tA, block.color);
-            // Parede traseira (+X)
             DrawTriangle3D(b10, tA, tB, sideCol);
             DrawTriangle3D(b10, tB, b11, sideCol);
-            // Laterais triangulares
             DrawTriangle3D(b00, tA, b10, sideCol);
             DrawTriangle3D(b01, b11, tB, sideCol);
             break;
-        }
-        case SlopeDir::NEG_X: {
-            tA = { x0, y1, z0 };
-            tB = { x0, y1, z1 };
+        case SlopeDir::NEG_X:
+            tA = { x0, y1, z0 }; tB = { x0, y1, z1 };
             DrawTriangle3D(tA, tB, b11, block.color);
             DrawTriangle3D(tA, b11, b10, block.color);
             DrawTriangle3D(b00, b01, tB, sideCol);
@@ -152,10 +143,8 @@ inline void DrawWorldBlock(const WorldBlock& block) {
             DrawTriangle3D(b00, tA, b10, sideCol);
             DrawTriangle3D(b01, b11, tB, sideCol);
             break;
-        }
-        case SlopeDir::POS_Z: {
-            tA = { x0, y1, z1 };
-            tB = { x1, y1, z1 };
+        case SlopeDir::POS_Z:
+            tA = { x0, y1, z1 }; tB = { x1, y1, z1 };
             DrawTriangle3D(b00, tA, tB, block.color);
             DrawTriangle3D(b00, tB, b10, block.color);
             DrawTriangle3D(b01, b11, tB, sideCol);
@@ -163,10 +152,8 @@ inline void DrawWorldBlock(const WorldBlock& block) {
             DrawTriangle3D(b00, b01, tA, sideCol);
             DrawTriangle3D(b10, tB, b11, sideCol);
             break;
-        }
-        case SlopeDir::NEG_Z: {
-            tA = { x0, y1, z0 };
-            tB = { x1, y1, z0 };
+        case SlopeDir::NEG_Z:
+            tA = { x0, y1, z0 }; tB = { x1, y1, z0 };
             DrawTriangle3D(tA, b01, b11, block.color);
             DrawTriangle3D(tA, b11, tB, block.color);
             DrawTriangle3D(b00, tA, tB, sideCol);
@@ -174,34 +161,18 @@ inline void DrawWorldBlock(const WorldBlock& block) {
             DrawTriangle3D(b00, b01, tA, sideCol);
             DrawTriangle3D(b10, tB, b11, sideCol);
             break;
-        }
         default:
             break;
     }
 
-    // Base inferior
     DrawTriangle3D(b00, b10, b11, sideCol);
     DrawTriangle3D(b00, b11, b01, sideCol);
 
-    // Arestas de contorno da rampa
     DrawLine3D(b00, b10, BLACK);
     DrawLine3D(b10, b11, BLACK);
     DrawLine3D(b11, b01, BLACK);
     DrawLine3D(b01, b00, BLACK);
     DrawLine3D(tA, tB, BLACK);
-    if (block.slopeDir == (int)SlopeDir::POS_X) {
-        DrawLine3D(b00, tA, BLACK); DrawLine3D(b01, tB, BLACK);
-        DrawLine3D(b10, tA, BLACK); DrawLine3D(b11, tB, BLACK);
-    } else if (block.slopeDir == (int)SlopeDir::NEG_X) {
-        DrawLine3D(b10, tA, BLACK); DrawLine3D(b11, tB, BLACK);
-        DrawLine3D(b00, tA, BLACK); DrawLine3D(b01, tB, BLACK);
-    } else if (block.slopeDir == (int)SlopeDir::POS_Z) {
-        DrawLine3D(b00, tA, BLACK); DrawLine3D(b10, tB, BLACK);
-        DrawLine3D(b01, tA, BLACK); DrawLine3D(b11, tB, BLACK);
-    } else if (block.slopeDir == (int)SlopeDir::NEG_Z) {
-        DrawLine3D(b01, tA, BLACK); DrawLine3D(b11, tB, BLACK);
-        DrawLine3D(b00, tA, BLACK); DrawLine3D(b10, tB, BLACK);
-    }
 }
 
 struct Tracer {
@@ -236,7 +207,7 @@ inline bool CheckOverlapStrict(Vector3 posA, Vector3 sizeA, Vector3 posB, Vector
 }
 
 // =============================================================================
-// SPATIAL HASH GRID (4m x 4m XZ) — SAVEPOINT_20
+// SPATIAL HASH GRID (4m x 4m XZ)
 // =============================================================================
 class SpatialHashGrid {
 public:
@@ -477,7 +448,7 @@ inline bool OverlapsAnyBlock(Vector3 pos, Vector3 size, const std::vector<WorldB
         if (blk.IsSlope()) {
             float surfY = blk.GetMaxSurfaceUnderBox(queryBox);
             if (queryBox.min.y >= surfY - 0.02f) {
-                return true; // Acima da superfície inclinada da rampa
+                return true;
             }
         }
         hit = true;
@@ -552,10 +523,13 @@ public:
             if (line.empty() || line[0] == '#') continue;
             std::istringstream iss(line);
             WorldBlock b{};
-            int r = 120, g = 125, bl = 135, slope = 0;
+            b.slopeDir = 0;
+            int r = 120, g = 125, bl = 135;
             if (iss >> b.pos.x >> b.pos.y >> b.pos.z >> b.size.x >> b.size.y >> b.size.z >> r >> g >> bl) {
-                if (iss >> slope) {
-                    b.slopeDir = std::clamp(slope, 0, 4);
+                std::string extraTag;
+                int slopeVal = 0;
+                if ((iss >> extraTag) && (extraTag == "SLOPE" || extraTag == "RAMP") && (iss >> slopeVal)) {
+                    b.slopeDir = std::clamp(slopeVal, 1, 4);
                 }
                 b.color = {
                     static_cast<unsigned char>(std::clamp(r, 0, 255)),
@@ -574,40 +548,39 @@ public:
         std::ofstream out(filename);
         if (!out.is_open()) return;
 
-        out << "# posX posY posZ tamX tamY tamZ R G B [slopeDir: 0=Caixa, 1=+X, 2=-X, 3=+Z, 4=-Z]\n";
-        out << "0.0 -0.5 0.0 52.0 1.0 52.0 58 64 74 0\n";
-        out << "0.0 2.5 -26.0 52.0 5.0 1.0 75 82 95 0\n";
-        out << "0.0 2.5 26.0 52.0 5.0 1.0 75 82 95 0\n";
-        out << "-26.0 2.5 0.0 1.0 5.0 52.0 75 82 95 0\n";
-        out << "26.0 2.5 0.0 1.0 5.0 52.0 75 82 95 0\n";
+        out << "# posX posY posZ tamX tamY tamZ R G B [SLOPE 1..4 opcional]\n";
+        out << "0.0 -0.5 0.0 52.0 1.0 52.0 58 64 74\n";
+        out << "0.0 2.5 -26.0 52.0 5.0 1.0 75 82 95\n";
+        out << "0.0 2.5 26.0 52.0 5.0 1.0 75 82 95\n";
+        out << "-26.0 2.5 0.0 1.0 5.0 52.0 75 82 95\n";
+        out << "26.0 2.5 0.0 1.0 5.0 52.0 75 82 95\n";
 
         if (preset == MapPreset::MOVEMENT_COURSE) {
-            out << "-6.0 0.5 12.0 4.0 1.0 4.0 95 130 165 0\n";
-            out << "0.0 1.1 6.0 4.0 2.2 4.0 95 150 185 0\n";
-            out << "6.0 1.7 0.0 4.0 3.4 4.0 95 170 205 0\n";
-            out << "0.0 2.2 -7.0 5.0 4.4 4.0 110 190 140 0\n";
-            out << "-8.0 2.6 -14.0 5.0 5.2 5.0 210 165 80 0\n";
-            // Rampa inclinada (-Z) e escadaria de degraus para teste de step-up
-            out << "12.0 1.1 10.0 4.0 2.2 6.0 85 165 140 4\n";
-            out << "12.0 1.1 4.5 4.0 2.2 5.0 90 135 160 0\n";
-            out << "12.0 0.25 0.5 4.0 0.5 1.2 140 145 155 0\n";
-            out << "12.0 0.50 -0.7 4.0 1.0 1.2 140 145 155 0\n";
-            out << "12.0 0.75 -1.9 4.0 1.5 1.2 140 145 155 0\n";
-            out << "12.0 1.00 -3.1 4.0 2.0 1.2 140 145 155 0\n";
+            out << "-6.0 0.5 12.0 4.0 1.0 4.0 95 130 165\n";
+            out << "0.0 1.1 6.0 4.0 2.2 4.0 95 150 185\n";
+            out << "6.0 1.7 0.0 4.0 3.4 4.0 95 170 205\n";
+            out << "0.0 2.2 -7.0 5.0 4.4 4.0 110 190 140\n";
+            out << "-8.0 2.6 -14.0 5.0 5.2 5.0 210 165 80\n";
+            out << "12.0 1.1 10.0 4.0 2.2 6.0 85 165 140 SLOPE 4\n";
+            out << "12.0 1.1 4.5 4.0 2.2 5.0 90 135 160\n";
+            out << "12.0 0.25 0.5 4.0 0.5 1.2 140 145 155\n";
+            out << "12.0 0.50 -0.7 4.0 1.0 1.2 140 145 155\n";
+            out << "12.0 0.75 -1.9 4.0 1.5 1.2 140 145 155\n";
+            out << "12.0 1.00 -3.1 4.0 2.0 1.2 140 145 155\n";
         } else if (preset == MapPreset::FIRING_RANGE) {
-            out << "0.0 0.6 9.5 16.0 1.2 0.7 110 118 130 0\n";
-            out << "-5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70 0\n";
-            out << "5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70 0\n";
-            out << "0.0 1.3 -6.5 3.4 2.6 0.9 95 105 120 0\n";
+            out << "0.0 0.6 9.5 16.0 1.2 0.7 110 118 130\n";
+            out << "-5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70\n";
+            out << "5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70\n";
+            out << "0.0 1.3 -6.5 3.4 2.6 0.9 95 105 120\n";
         } else {
-            out << "-4.5 0.75 7.5 3.2 1.5 0.8 100 110 125 0\n";
-            out << "4.5 0.75 7.5 3.2 1.5 0.8 100 110 125 0\n";
-            out << "0.0 1.2 1.5 4.2 2.4 1.1 90 100 115 0\n";
-            out << "-9.5 1.35 0.0 2.8 2.7 0.55 155 105 70 0\n";
-            out << "9.5 1.35 0.0 2.8 2.7 0.55 155 105 70 0\n";
-            out << "-5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120 0\n";
-            out << "5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120 0\n";
-            out << "0.0 1.5 -12.5 5.5 3.0 1.2 82 92 108 0\n";
+            out << "-4.5 0.75 7.5 3.2 1.5 0.8 100 110 125\n";
+            out << "4.5 0.75 7.5 3.2 1.5 0.8 100 110 125\n";
+            out << "0.0 1.2 1.5 4.2 2.4 1.1 90 100 115\n";
+            out << "-9.5 1.35 0.0 2.8 2.7 0.55 155 105 70\n";
+            out << "9.5 1.35 0.0 2.8 2.7 0.55 155 105 70\n";
+            out << "-5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120\n";
+            out << "5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120\n";
+            out << "0.0 1.5 -12.5 5.5 3.0 1.2 82 92 108\n";
         }
     }
 };

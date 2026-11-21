@@ -161,7 +161,7 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
 
         Weapon.hpp: TraceBallisticShot e UpdateGrenades otimizados com travessia DDA e consultas AABB na grade espacial para balística com wallbang e rebote físico de granadas.
 
-  [SAVEPOINT_21 — ATUAL] Navegação Dinâmica (NavGrid A*) & Física de Rampas/Escadas (Navigation.hpp, World.hpp, Player.hpp, SquadAI.hpp)
+  [SAVEPOINT_21] Navegação Dinâmica (NavGrid A*) & Física de Rampas/Escadas (Navigation.hpp, World.hpp, Player.hpp, SquadAI.hpp)
 
     Status: Implementado e modularizado (Navigation.hpp, World.hpp, Player.hpp, SquadAI.hpp).
 
@@ -173,16 +173,20 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
 
         SquadAI.hpp: Integração de NavigateAgentTo (A*) e suporte a degraus/rampas em MoveCharacterWithCollision, UpdateAllies e UpdateEnemies para aliados e inimigos contornarem salas fechadas, corredores em L e múltiplos andares.
         
-[SAVEPOINT_22] Arquitetura Orientada a Eventos (Event Bus) & Unificação de Entidades (Events.hpp, Combatant.hpp, main.cpp)
+[SAVEPOINT_22 — ATUAL] Arquitetura Orientada a Eventos (Event Bus) & Unificação de Entidades (Events.hpp, Combatant.hpp, SquadAI.hpp, main.cpp)
 
-    Status: Planejado (Desacoplamento de Núcleo).
+    Status: Implementado, corrigido e modularizado (Events.hpp, Combatant.hpp, World.hpp, Navigation.hpp, SquadAI.hpp, Weapon.hpp, main.cpp).
 
-    Objetivo:
+    Adicionado / Corrigido:
 
-        Implementar um barramento de eventos (EventManager::Emit(...) para EnemyKilledEvent, DamageDealtEvent, ObjectiveCompletedEvent) para que Audio, SaveSystem, MissionManager, Hitmarker e LanNetworkManager reajam sem acoplamento direto no loop principal.
+        Events.hpp & Combatant.hpp: Barramento Publish/Subscribe (EventManager) e entidade unificada Combatant (SquadRoster) desacoplando áudio, save, missão, hitmarkers e rede LAN.
 
-        Unificar SourcePlayer e SquadAlly sob uma interface/componente comum (Combatant), eliminando duplicação de lógica de dano, reanimação, supressão e inventário.
+        World.hpp: Parser de rampas exige palavra-chave explícita SLOPE para evitar que coberturas retangulares sejam interpretadas como cunhas/trapézios.
 
+        SquadAI.hpp & Navigation.hpp: FindBestCoverPoint recalibrado com 8 pontos distribuídos por cobertura, altura agachada (cand.y + 0.85f) e retenção de supressão durante o deslocamento até o abrigo.
+
+        Weapon.hpp & main.cpp: Restrição de loadout aplicada no modo TACTICAL_SQUAD (restrictToLoadout, equippedGadgetSlot) e modelos 3D detalhados para todas as 8 armas e gadgets com suporte a .glb via AssetManager.
+        
 [SAVEPOINT_23] Cenários Orientados a Dados (Data-Driven Scene Serialization) (World.hpp, Objectives.hpp, Cutscene.hpp, MapEditor.hpp)
 
     Status: Planejado (Pipeline de Conteúdo).

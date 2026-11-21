@@ -5,6 +5,7 @@
 #include "World.hpp"
 #include "Player.hpp"
 #include "Navigation.hpp"
+#include "Events.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
@@ -78,7 +79,6 @@ struct SquadAlly {
     bool hasPingOrder = false;
     Vector3 pingTargetPos = { 0.0f, 0.0f, 0.0f };
 
-    // Navegação Dinâmica A* (SAVEPOINT_21)
     std::vector<Vector3> navPath;
     int navWaypointIdx = 0;
     float navRepathTimer = 0.0f;
@@ -107,7 +107,6 @@ struct EnemyBot {
     Vector3 coverPos = { 0.0f, 0.0f, 0.0f };
     float coverSearchTimer = 0.0f;
 
-    // Navegação Dinâmica A* (SAVEPOINT_21)
     std::vector<Vector3> navPath;
     int navWaypointIdx = 0;
     float navRepathTimer = 0.0f;
@@ -145,9 +144,6 @@ inline void ResetWave(std::vector<EnemyBot>& enemies) {
     enemies.push_back({ 4, {  8.0f, 0.0f, -11.0f }, {  8.0f, 0.0f, -11.0f }, 150.0f, 150.0f, 0.7f, 3.6f, 0.0f, false, -1 });
 }
 
-// =============================================================================
-// MOVIMENTAÇÃO COM COLISÃO AABB, STEP-UP E RAMPAS (SAVEPOINT_21)
-// =============================================================================
 inline void MoveCharacterWithCollision(Vector3& pos, float radius, float height,
                                        Vector3 targetPos, float speed, float dt,
                                        const std::vector<WorldBlock>& world,
@@ -211,19 +207,16 @@ inline void MoveCharacterWithCollision(Vector3& pos, float radius, float height,
         return false;
     };
 
-    // Eixo X com deslize lateral
     if (!tryAxisMove(dir.x * step, 0.0f)) {
         float slideSign = (dir.z >= 0.0f) ? 1.0f : -1.0f;
         tryAxisMove(0.0f, slideSign * step * 0.70f);
     }
 
-    // Eixo Z com deslize lateral
     if (!tryAxisMove(0.0f, dir.z * step)) {
         float slideSign = (dir.x >= 0.0f) ? 1.0f : -1.0f;
         tryAxisMove(slideSign * step * 0.70f, 0.0f);
     }
 
-    // Ajuste vertical de solo (descida de rampas ou degraus)
     BoundingBox groundProbe = {
         { pos.x - radius * 0.85f, pos.y - 1.5f, pos.z - radius * 0.85f },
         { pos.x + radius * 0.85f, pos.y + 0.1f, pos.z + radius * 0.85f }
@@ -266,7 +259,6 @@ inline void MoveAllyWithCollision(SquadAlly& ally, Vector3 targetPos, float spee
     MoveCharacterWithCollision(ally.pos, 0.38f, h, targetPos, speed, dt, world, GetWorldSpatialGrid(world));
 }
 
-// Navegação guiada por NavGrid A* (contorna salas fechadas, corredores em L e multi-andares)
 inline void NavigateAgentTo(Vector3& pos, float radius, float height,
                             Vector3 goalPos, float speed, float dt,
                             std::vector<Vector3>& navPath, int& navWaypointIdx,
@@ -278,7 +270,7 @@ inline void NavigateAgentTo(Vector3& pos, float radius, float height,
     float goalShift = Vector3Distance(goalPos, cachedGoal);
 
     if (navPath.empty() || navWaypointIdx >= static_cast<int>(navPath.size()) ||
-        goalShift > 1.15f || navRepathTimer <= 0.0f) {
+        goalShift > 0.95f || navRepathTimer <= 0.0f) {
         cachedGoal = goalPos;
         navRepathTimer = 0.45f;
         navWaypointIdx = 0;
@@ -305,6 +297,7 @@ inline void NavigateAgentTo(Vector3& pos, float radius, float height,
     MoveCharacterWithCollision(pos, radius, height, activeTarget, speed, dt, world, spatialGrid);
 }
 
+// Busca 8 pontos distribuídos ao redor de cada cobertura e valida proteção agachada (y + 0.85m)
 inline bool FindBestCoverPoint(Vector3 charPos, Vector3 threatPos,
                                const std::vector<WorldBlock>& world,
                                Vector3& outCover) {
@@ -313,34 +306,46 @@ inline bool FindBestCoverPoint(Vector3 charPos, Vector3 threatPos,
     float bestScore = 1e30f;
     bool found = false;
 
-    const float searchRadius = 15.0f;
-    Vector3 searchSize = { searchRadius * 2.0f, 5.0f, searchRadius * 2.0f };
+    const float searchRadius = 18.0f;
+    Vector3 searchSize = { searchRadius * 2.0f, 6.0f, searchRadius * 2.0f };
 
     grid.QueryAABB(charPos, searchSize, [&](int idx) -> bool {
         const WorldBlock& b = world[idx];
         if (b.IsSlope() || b.size.y < 0.85f || b.size.x > 25.0f || b.size.z > 25.0f) return true;
 
-        float margin = 0.85f;
-        Vector3 candidates[4] = {
-            { b.pos.x + b.size.x * 0.5f + margin, charPos.y, b.pos.z },
-            { b.pos.x - b.size.x * 0.5f - margin, charPos.y, b.pos.z },
-            { b.pos.x, charPos.y, b.pos.z + b.size.z * 0.5f + margin },
-            { b.pos.x, charPos.y, b.pos.z - b.size.z * 0.5f - margin }
+        float margin = 0.78f;
+        float offX = std::min(0.85f, b.size.x * 0.28f);
+        float offZ = std::min(0.85f, b.size.z * 0.28f);
+
+        Vector3 candidates[8] = {
+            { b.pos.x + b.size.x * 0.5f + margin, charPos.y, b.pos.z - offZ },
+            { b.pos.x + b.size.x * 0.5f + margin, charPos.y, b.pos.z + offZ },
+            { b.pos.x - b.size.x * 0.5f - margin, charPos.y, b.pos.z - offZ },
+            { b.pos.x - b.size.x * 0.5f - margin, charPos.y, b.pos.z + offZ },
+            { b.pos.x - offX, charPos.y, b.pos.z + b.size.z * 0.5f + margin },
+            { b.pos.x + offX, charPos.y, b.pos.z + b.size.z * 0.5f + margin },
+            { b.pos.x - offX, charPos.y, b.pos.z - b.size.z * 0.5f - margin },
+            { b.pos.x + offX, charPos.y, b.pos.z - b.size.z * 0.5f - margin }
         };
 
         for (Vector3 cand : candidates) {
             int nIdx = navGrid.FindNearestNode(cand);
             if (nIdx == -1) continue;
-            // Garante que o ponto está em célula caminhável acessível
-            if (Vector3Distance(cand, navGrid.FindNearestNode(cand) != -1 ? cand : cand) > 2.5f) continue;
 
-            if (OverlapsAnyBlock({ cand.x, cand.y + 0.65f, cand.z }, { 0.76f, 1.20f, 0.76f }, world, grid)) continue;
+            Vector3 nodePos = navGrid.GetNodePosition(nIdx);
+            if (std::fabs(nodePos.x - cand.x) > 1.35f || std::fabs(nodePos.z - cand.z) > 1.35f) continue;
+            cand.y = nodePos.y;
 
-            Vector3 eyeCheck = { cand.x, cand.y + 1.20f, cand.z };
-            if (!HasLineOfSight(threatPos, eyeCheck, world, grid)) {
+            // Verifica folga livre para o corpo agachado atrás da cobertura
+            if (OverlapsAnyBlock({ cand.x, cand.y + 0.65f, cand.z }, { 0.68f, 1.15f, 0.68f }, world, grid)) continue;
+
+            // Testa proteção na altura agachada (0.85m) contra a linha de tiro da ameaça
+            Vector3 crouchedEye = { cand.x, cand.y + 0.85f, cand.z };
+            if (!HasLineOfSight(threatPos, crouchedEye, world, grid)) {
                 float distToChar = Vector3Distance(charPos, cand);
                 float distToThreat = Vector3Distance(threatPos, cand);
-                float score = distToChar - distToThreat * 0.15f;
+                float tallCoverBonus = (b.size.y >= 1.4f) ? -0.8f : 0.0f;
+                float score = distToChar - distToThreat * 0.12f + tallCoverBonus;
                 if (score < bestScore) {
                     bestScore = score;
                     outCover = cand;
@@ -406,8 +411,7 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
     Vector3 targetCover = { hitPoint.x, 0.0f, hitPoint.z };
     int nearNode = navGrid.FindNearestNode(hitPoint);
     if (nearNode != -1) {
-        // Mantém a altura do andar pingado
-        targetCover.y = std::max(0.0f, hitPoint.y - 0.5f);
+        targetCover.y = navGrid.GetNodePosition(nearNode).y;
     }
 
     Vector3 threatRef = { 0.0f, 1.5f, -14.0f };
@@ -444,6 +448,7 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
     allies[bestAllyIdx].hasPingOrder = true;
     allies[bestAllyIdx].pingTargetPos = targetCover;
     allies[bestAllyIdx].anchorPos = targetCover;
+    allies[bestAllyIdx].navPath.clear();
     allies[bestAllyIdx].navRepathTimer = 0.0f;
 
     ping.type = PingType::MOVE_COVER;
@@ -491,6 +496,7 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
 
     for (size_t i = 0; i < allies.size(); i++) {
         SquadAlly& ally = allies[i];
+        int allySlot = static_cast<int>(i) + 1;
 
         if (ally.isDowned) {
             ally.aggro = 0.0f;
@@ -501,24 +507,28 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
         }
 
         if (ally.hp < ally.lastHp) {
-            ally.suppression = std::min(100.0f, ally.suppression + (ally.lastHp - ally.hp) * 2.2f);
+            ally.suppression = std::min(100.0f, ally.suppression + (ally.lastHp - ally.hp) * 2.8f);
         }
         ally.lastHp = ally.hp;
-        ally.suppression = std::max(0.0f, ally.suppression - 16.0f * dt);
 
-        if (!ally.isSuppressed && ally.suppression >= 45.0f) {
+        bool runningToCover = ally.isSuppressed && ally.hasCoverPos && Vector3Distance(ally.pos, ally.coverPos) > 0.75f;
+        float suppDecay = runningToCover ? 5.5f : 12.0f;
+        ally.suppression = std::max(0.0f, ally.suppression - suppDecay * dt);
+
+        if (!ally.isSuppressed && ally.suppression >= 40.0f) {
             ally.isSuppressed = true;
             ally.coverSearchTimer = 0.0f;
-        } else if (ally.isSuppressed && ally.suppression < 20.0f) {
+            ally.navPath.clear();
+        } else if (ally.isSuppressed && ally.suppression < 18.0f) {
             ally.isSuppressed = false;
             ally.hasCoverPos = false;
+            ally.navPath.clear();
         }
 
         float aggroFloor = (order == SquadOrder::SUPPRESS) ? 65.0f : 12.0f;
         ally.aggro = std::max(aggroFloor, ally.aggro - 7.5f * dt);
         ally.strafePhase += dt * 1.9f;
 
-        // Resgate do jogador usando A* (contorna paredes e corredores até o jogador caído)
         if (static_cast<int>(i) == rescuerIdx && player.isDowned) {
             float dToPlayer = Vector3Distance(ally.pos, player.pos);
             if (dToPlayer > 1.75f) {
@@ -531,16 +541,16 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
                     player.isDowned = false;
                     player.hp = 75.0f;
                     player.reviveProgress = 0.0f;
+                    EventManager::Emit(CombatantRevivedEvent{ allySlot, 0, "Alpha", player.pos });
                 }
             }
             continue;
         }
 
-        // Busca cobertura usando A* para contornar corredores em L
         if (ally.isSuppressed) {
             ally.coverSearchTimer -= dt;
             if (!ally.hasCoverPos || ally.coverSearchTimer <= 0.0f) {
-                ally.coverSearchTimer = 1.4f;
+                ally.coverSearchTimer = 1.6f;
                 Vector3 threat = { 0.0f, 1.5f, -14.0f };
                 for (const auto& e : enemies) {
                     if (e.IsAlive()) {
@@ -548,17 +558,19 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
                         break;
                     }
                 }
-                ally.hasCoverPos = FindBestCoverPoint(ally.pos, threat, world, ally.coverPos);
+                if (FindBestCoverPoint(ally.pos, threat, world, ally.coverPos)) {
+                    ally.hasCoverPos = true;
+                    ally.navPath.clear();
+                }
             }
             if (ally.hasCoverPos) {
-                NavigateAgentTo(ally.pos, 0.38f, 1.25f, ally.coverPos, 4.4f, dt,
+                NavigateAgentTo(ally.pos, 0.38f, 1.25f, ally.coverPos, 4.8f, dt,
                                 ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
                                 world, grid, navGrid);
             }
             continue;
         }
 
-        // Movimentação tática guiada por NavGrid A*
         if (ally.hasPingOrder) {
             NavigateAgentTo(ally.pos, 0.38f, 1.80f, ally.pingTargetPos, 5.2f, dt,
                             ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
@@ -598,18 +610,36 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
         ally.shootCooldown -= dt;
         if (targetIdx != -1 && ally.shootCooldown <= 0.0f) {
             EnemyBot& target = enemies[targetIdx];
+            bool wasAlive = target.IsAlive();
             bool suppressMode = (order == SquadOrder::SUPPRESS);
             ally.shootCooldown = suppressMode
                 ? (0.24f + static_cast<float>(GetRandomValue(0, 22)) * 0.01f)
                 : (0.48f + static_cast<float>(GetRandomValue(0, 35)) * 0.01f);
 
             float dmg = suppressMode ? 14.0f : 19.0f;
-            float suppAdd = suppressMode ? 24.0f : 12.0f;
+            float suppAdd = suppressMode ? 28.0f : 16.0f;
             target.hp -= dmg;
             target.suppression = std::min(100.0f, target.suppression + suppAdd);
 
             ally.aggro = std::min(100.0f, ally.aggro + (suppressMode ? 26.0f : 14.0f));
-            tracers.push_back({ ally.GetEyePos(), target.GetEyePos(), ally.color, 0.09f });
+
+            Vector3 muzzle = ally.GetEyePos();
+            Vector3 targetEye = target.GetEyePos();
+            tracers.push_back({ muzzle, targetEye, ally.color, 0.09f });
+
+            EventManager::Emit(WeaponFiredEvent{
+                allySlot, 2, muzzle, targetEye, false, false, false, ally.color
+            });
+
+            EventManager::Emit(DamageDealtEvent{
+                allySlot, target.id, true, dmg, false, false, false, false, targetEye, ally.pos
+            });
+
+            if (wasAlive && !target.IsAlive()) {
+                EventManager::Emit(EnemyKilledEvent{
+                    allySlot, target.id, target.pos, false, false, false
+                });
+            }
         }
     }
 }
@@ -619,6 +649,7 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
                           const std::vector<WorldBlock>& world,
                           std::vector<Tracer>& tracers,
                           std::vector<DamageIndicator>& damageIndicators) {
+    (void)damageIndicators;
     const SpatialHashGrid& grid = GetWorldSpatialGrid(world);
     const NavGrid& navGrid = GetWorldNavGrid(world);
 
@@ -627,17 +658,22 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
 
         if (enemy.lastHp < 0.0f) enemy.lastHp = enemy.hp;
         if (enemy.hp < enemy.lastHp) {
-            enemy.suppression = std::min(100.0f, enemy.suppression + (enemy.lastHp - enemy.hp) * 1.9f);
+            enemy.suppression = std::min(100.0f, enemy.suppression + (enemy.lastHp - enemy.hp) * 2.2f);
         }
         enemy.lastHp = enemy.hp;
-        enemy.suppression = std::max(0.0f, enemy.suppression - 15.0f * dt);
 
-        if (!enemy.isSuppressed && enemy.suppression >= 45.0f) {
+        bool runningToCover = enemy.isSuppressed && enemy.hasCoverPos && Vector3Distance(enemy.pos, enemy.coverPos) > 0.75f;
+        float suppDecay = runningToCover ? 5.5f : 11.5f;
+        enemy.suppression = std::max(0.0f, enemy.suppression - suppDecay * dt);
+
+        if (!enemy.isSuppressed && enemy.suppression >= 40.0f) {
             enemy.isSuppressed = true;
             enemy.coverSearchTimer = 0.0f;
-        } else if (enemy.isSuppressed && enemy.suppression < 20.0f) {
+            enemy.navPath.clear();
+        } else if (enemy.isSuppressed && enemy.suppression < 18.0f) {
             enemy.isSuppressed = false;
             enemy.hasCoverPos = false;
+            enemy.navPath.clear();
         }
 
         int bestTargetId = -1;
@@ -673,11 +709,14 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
         if (enemy.isSuppressed) {
             enemy.coverSearchTimer -= dt;
             if (!enemy.hasCoverPos || enemy.coverSearchTimer <= 0.0f) {
-                enemy.coverSearchTimer = 1.4f;
-                enemy.hasCoverPos = FindBestCoverPoint(enemy.pos, bestThreatPos, world, enemy.coverPos);
+                enemy.coverSearchTimer = 1.6f;
+                if (FindBestCoverPoint(enemy.pos, bestThreatPos, world, enemy.coverPos)) {
+                    enemy.hasCoverPos = true;
+                    enemy.navPath.clear();
+                }
             }
             if (enemy.hasCoverPos) {
-                NavigateAgentTo(enemy.pos, 0.38f, 1.25f, enemy.coverPos, 4.3f, dt,
+                NavigateAgentTo(enemy.pos, 0.38f, 1.25f, enemy.coverPos, 4.7f, dt,
                                 enemy.navPath, enemy.navWaypointIdx, enemy.navRepathTimer, enemy.navGoalPos,
                                 world, grid, navGrid);
             }
@@ -692,7 +731,6 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
 
         bool hasLos = HasLineOfSight(enemy.GetEyePos(), targetAim, world, grid);
         if (!hasLos) {
-            // Usa A* para flanquear e contornar salas fechadas ou múltiplos andares até obter linha de visão
             NavigateAgentTo(enemy.pos, 0.38f, 1.80f, bestTargetFeet, 3.4f, dt,
                             enemy.navPath, enemy.navWaypointIdx, enemy.navRepathTimer, enemy.navGoalPos,
                             world, grid, navGrid);
@@ -702,23 +740,39 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
         enemy.shootTimer -= dt;
         if (enemy.shootTimer <= 0.0f) {
             enemy.shootTimer = 0.65f + static_cast<float>(GetRandomValue(0, 45)) * 0.01f;
-            tracers.push_back({ enemy.GetEyePos(), targetAim, RED, 0.10f });
+            Vector3 muzzle = enemy.GetEyePos();
+            tracers.push_back({ muzzle, targetAim, RED, 0.10f });
+
+            EventManager::Emit(WeaponFiredEvent{
+                99, 0, muzzle, targetAim, false, false, true, RED
+            });
 
             if (bestTargetId == 0) {
-                player.hp -= 10.0f;
-                damageIndicators.push_back({ enemy.pos, 0.65f });
+                float dmg = 10.0f;
+                player.hp -= dmg;
+                EventManager::Emit(DamageDealtEvent{
+                    99, 0, false, dmg, false, false, false, false, targetAim, enemy.pos
+                });
+
                 if (player.hp <= 0.0f) {
                     player.hp = 0.0f;
                     player.isDowned = true;
                     player.draggingAllyId = -1;
+                    EventManager::Emit(CombatantDownedEvent{ 0, "Alpha", player.pos });
                 }
             } else {
                 SquadAlly& targetAlly = allies[bestTargetId - 1];
-                targetAlly.hp -= 13.0f;
+                float dmg = 13.0f;
+                targetAlly.hp -= dmg;
+                EventManager::Emit(DamageDealtEvent{
+                    99, bestTargetId, false, dmg, false, false, false, false, targetAim, enemy.pos
+                });
+
                 if (targetAlly.hp <= 0.0f) {
                     targetAlly.hp = 0.0f;
                     targetAlly.isDowned = true;
                     targetAlly.bleedoutTimer = 25.0f;
+                    EventManager::Emit(CombatantDownedEvent{ bestTargetId, targetAlly.name, targetAlly.pos });
                 }
             }
         }

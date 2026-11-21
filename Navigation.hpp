@@ -13,7 +13,7 @@
 struct NavNode {
     int gx = 0;
     int gz = 0;
-    Vector3 worldPos = { 0.0f, 0.0f, 0.0f }; // Posição nos pés sobre a superfície caminhável
+    Vector3 worldPos = { 0.0f, 0.0f, 0.0f };
     int neighbors[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
     float neighborCost[8] = { 0 };
     uint8_t neighborCount = 0;
@@ -22,10 +22,10 @@ struct NavNode {
 class NavGrid {
 public:
     static constexpr float CELL_SIZE = 1.0f;
-    static constexpr float AGENT_RADIUS = 0.36f;
-    static constexpr float AGENT_CLEARANCE_H = 1.45f;
-    static constexpr float MAX_CLIMB_STEP = 0.72f; // Suporta step-up e rampas entre células de 1m
-    static constexpr float MAX_DROP_STEP  = 2.10f; // Permite descer plataformas/degraus
+    static constexpr float AGENT_RADIUS = 0.34f;
+    static constexpr float AGENT_CLEARANCE_H = 1.40f;
+    static constexpr float MAX_CLIMB_STEP = 0.72f;
+    static constexpr float MAX_DROP_STEP  = 2.10f;
 
     void Clear() {
         nodes.clear();
@@ -34,7 +34,6 @@ public:
         gridD = 0;
     }
 
-    // Gera automaticamente a malha 3D caminhável multi-andar a partir dos WorldBlock
     void Build(const std::vector<WorldBlock>& world, const SpatialHashGrid& spatialGrid) {
         Clear();
         if (world.empty()) return;
@@ -50,7 +49,6 @@ public:
             maxZ = std::max(maxZ, bb.max.z);
         }
 
-        // Limita a área navegável para evitar desperdício em planos infinitos
         minX = std::max(minX, -80.0f);
         maxX = std::min(maxX,  80.0f);
         minZ = std::max(minZ, -80.0f);
@@ -67,7 +65,6 @@ public:
         std::vector<float> candidateHeights;
         candidateHeights.reserve(8);
 
-        // 1. Extrai todas as superfícies caminháveis válidas por coluna (suporta múltiplos andares)
         for (int gx = 0; gx < gridW; gx++) {
             float wx = originX + (static_cast<float>(gx) + 0.5f) * CELL_SIZE;
             for (int gz = 0; gz < gridD; gz++) {
@@ -112,7 +109,6 @@ public:
             }
         }
 
-        // 2. Conecta vizinhos 8-direcionais respeitando desníveis, rampas e quinas de paredes
         static const int dxTable[8] = {  1, -1,  0,  0,  1,  1, -1, -1 };
         static const int dzTable[8] = {  0,  0,  1, -1,  1, -1,  1, -1 };
 
@@ -127,7 +123,6 @@ public:
                 int targetNode = FindCompatibleNodeInColumn(nx, nz, cur.worldPos.y);
                 if (targetNode == -1) continue;
 
-                // Para diagonais, exige que ambos os eixos cardinais sejam transitáveis (evita travar em quinas)
                 if (dxTable[dir] != 0 && dzTable[dir] != 0) {
                     int sideA = FindCompatibleNodeInColumn(cur.gx + dxTable[dir], cur.gz, cur.worldPos.y);
                     int sideB = FindCompatibleNodeInColumn(cur.gx, cur.gz + dzTable[dir], cur.worldPos.y);
@@ -181,14 +176,18 @@ public:
         return bestIdx;
     }
 
-    // Verifica se há linha caminhável limpa entre dois pontos (sem paredes e sem buracos)
+    Vector3 GetNodePosition(int idx) const {
+        if (idx >= 0 && idx < static_cast<int>(nodes.size())) return nodes[idx].worldPos;
+        return { 0.0f, 0.0f, 0.0f };
+    }
+
     bool HasClearWalkLine(Vector3 from, Vector3 to, const std::vector<WorldBlock>& world, const SpatialHashGrid& spatialGrid) const {
         Vector3 diff = { to.x - from.x, 0.0f, to.z - from.z };
         float horizDist = std::sqrt(diff.x * diff.x + diff.z * diff.z);
         if (horizDist < 0.25f) return std::fabs(to.y - from.y) <= MAX_CLIMB_STEP;
 
         Vector3 dir = { diff.x / horizDist, 0.0f, diff.z / horizDist };
-        Vector3 perp = { -dir.z * 0.34f, 0.0f, dir.x * 0.34f };
+        Vector3 perp = { -dir.z * 0.22f, 0.0f, dir.x * 0.22f };
 
         int steps = std::max(2, static_cast<int>(std::ceil(horizDist / 0.55f)));
         float prevY = from.y;
@@ -207,11 +206,10 @@ public:
             if (floorY - prevY > MAX_CLIMB_STEP || prevY - floorY > MAX_DROP_STEP) return false;
             prevY = floorY;
 
-            // Verifica folga lateral do corpo (ombro esquerdo, centro, ombro direito)
-            Vector3 torsoSize = { 0.42f, 1.05f, 0.42f };
-            Vector3 cMid   = { p.x, floorY + 0.95f, p.z };
-            Vector3 cLeft  = { p.x + perp.x, floorY + 0.95f, p.z + perp.z };
-            Vector3 cRight = { p.x - perp.x, floorY + 0.95f, p.z - perp.z };
+            Vector3 torsoSize = { 0.34f, 1.00f, 0.34f };
+            Vector3 cMid   = { p.x, floorY + 0.90f, p.z };
+            Vector3 cLeft  = { p.x + perp.x, floorY + 0.90f, p.z + perp.z };
+            Vector3 cRight = { p.x - perp.x, floorY + 0.90f, p.z - perp.z };
 
             if (OverlapsAnyBlock(cMid, torsoSize, world, spatialGrid) ||
                 OverlapsAnyBlock(cLeft, torsoSize, world, spatialGrid) ||
@@ -222,7 +220,6 @@ public:
         return true;
     }
 
-    // Busca A* + Suavização String-Pulling
     bool FindPath(Vector3 startPos, Vector3 goalPos,
                   const std::vector<WorldBlock>& world,
                   const SpatialHashGrid& spatialGrid,
@@ -233,7 +230,6 @@ public:
             return false;
         }
 
-        // Atalho direto se o caminho estiver livre sem obstáculos ou desníveis abruptos
         if (HasClearWalkLine(startPos, goalPos, world, spatialGrid)) {
             outPath.push_back(goalPos);
             return true;
@@ -277,7 +273,7 @@ public:
 
         gScore[startNode] = 0.0f;
         cameFrom[startNode] = -1;
-        closedStamp[startNode] = stamp; // Marcado como inicializado
+        closedStamp[startNode] = stamp;
         openSet.push({ startNode, Heuristic(nodes[startNode].worldPos, nodes[goalNode].worldPos) });
 
         int bestFallbackNode = startNode;
@@ -324,7 +320,6 @@ public:
             return false;
         }
 
-        // Reconstrói cadeia bruta
         std::vector<Vector3> rawPath;
         int curr = targetEndNode;
         while (curr != -1 && curr != startNode) {
@@ -336,7 +331,6 @@ public:
             rawPath.push_back(goalPos);
         }
 
-        // Suavização String-Pulling: remove pontos intermediários redundantes com linha de visão caminhável
         Vector3 anchor = startPos;
         size_t idx = 0;
         while (idx < rawPath.size()) {
@@ -399,9 +393,8 @@ private:
     static bool IsSurfaceWalkable(float wx, float surfY, float wz,
                                   const std::vector<WorldBlock>& world,
                                   const SpatialHashGrid& spatialGrid) {
-        // Verifica se há espaço livre acima da superfície (altura mínima agachada/em pé de 1.45m)
         Vector3 bodyCenter = { wx, surfY + 0.14f + AGENT_CLEARANCE_H * 0.5f, wz };
-        Vector3 bodySize   = { AGENT_RADIUS * 1.85f, AGENT_CLEARANCE_H, AGENT_RADIUS * 1.85f };
+        Vector3 bodySize   = { AGENT_RADIUS * 1.80f, AGENT_CLEARANCE_H, AGENT_RADIUS * 1.80f };
         BoundingBox bodyBox = {
             { bodyCenter.x - bodySize.x * 0.5f, bodyCenter.y - bodySize.y * 0.5f, bodyCenter.z - bodySize.z * 0.5f },
             { bodyCenter.x + bodySize.x * 0.5f, bodyCenter.y + bodySize.y * 0.5f, bodyCenter.z + bodySize.z * 0.5f }
@@ -425,7 +418,6 @@ private:
     }
 };
 
-// Cache sincronizado automaticamente com o mapa ativo
 inline const NavGrid& GetWorldNavGrid(const std::vector<WorldBlock>& world) {
     static NavGrid cachedNav;
     static const WorldBlock* lastPtr = nullptr;

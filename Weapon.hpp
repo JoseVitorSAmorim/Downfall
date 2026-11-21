@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <type_traits>
 
 class AssetManager;
 
@@ -46,14 +47,14 @@ struct WeaponStats {
 
 inline const WeaponStats& GetWeaponStats(WeaponId id) {
     static const std::array<WeaponStats, static_cast<size_t>(WeaponId::COUNT)> table = {{
-        { WeaponId::RIFLE,        "FUZIL TATICO 5.56",   35.0f, 95.0f, 1.05f, 0.110f, 1.45f, 0.012f, 1, 30, true,  false, false, 12.0f, 18.0f, 14.0f, GREEN },
-        { WeaponId::SHOTGUN,      "ESCOPETA TATICA 12",  16.0f, 28.0f, 0.35f, 0.720f, 1.75f, 0.075f, 8,  8, false, false, false, 20.0f, 24.0f, 26.0f, ORANGE },
-        { WeaponId::LMG,          "LMG PESADA M249",     28.0f, 90.0f, 1.65f, 0.085f, 2.30f, 0.024f, 1, 80, true,  false, false, 18.0f, 22.0f, 28.0f, GOLD },
-        { WeaponId::PISTOL,       "PISTOLA 9MM",         26.0f, 65.0f, 0.55f, 0.160f, 1.05f, 0.015f, 1, 15, false, false, false,  8.0f, 12.0f, 10.0f, SKYBLUE },
-        { WeaponId::REVOLVER,     "REVOLVER .44 MAGNUM", 62.0f, 85.0f, 1.35f, 0.420f, 1.50f, 0.010f, 1,  6, false, false, false, 16.0f, 24.0f, 20.0f, GOLD },
+        { WeaponId::RIFLE,        "FUZIL TATICO 5.56",   35.0f, 95.0f, 1.05f, 0.110f, 1.45f, 0.012f, 1, 30, true,  false, false, 12.0f, 18.0f, 22.0f, GREEN },
+        { WeaponId::SHOTGUN,      "ESCOPETA TATICA 12",  16.0f, 28.0f, 0.35f, 0.720f, 1.75f, 0.075f, 8,  8, false, false, false, 20.0f, 24.0f, 34.0f, ORANGE },
+        { WeaponId::LMG,          "LMG PESADA M249",     28.0f, 90.0f, 1.65f, 0.085f, 2.30f, 0.024f, 1, 80, true,  false, false, 18.0f, 22.0f, 32.0f, GOLD },
+        { WeaponId::PISTOL,       "PISTOLA 9MM",         26.0f, 65.0f, 0.55f, 0.160f, 1.05f, 0.015f, 1, 15, false, false, false,  8.0f, 12.0f, 14.0f, SKYBLUE },
+        { WeaponId::REVOLVER,     "REVOLVER .44 MAGNUM", 62.0f, 85.0f, 1.35f, 0.420f, 1.50f, 0.010f, 1,  6, false, false, false, 16.0f, 24.0f, 26.0f, GOLD },
         { WeaponId::MELEE_KNIFE,  "FACA TATICA",         85.0f,  2.6f, 0.00f, 0.450f, 0.00f, 0.000f, 1,  1, false, true,  false,  2.0f,  4.0f,  5.0f, LIME },
-        { WeaponId::GADGET_FRAG,  "GRANADA FRAG M67",   115.0f, 30.0f, 0.00f, 0.800f, 0.00f, 0.000f, 1,  2, false, false, true,  25.0f, 30.0f, 40.0f, RED },
-        { WeaponId::GADGET_FLASH, "GRANADA FLASHBANG",    5.0f, 30.0f, 0.00f, 0.800f, 0.00f, 0.000f, 1,  2, false, false, true,  15.0f, 20.0f, 50.0f, SKYBLUE }
+        { WeaponId::GADGET_FRAG,  "GRANADA FRAG M67",   115.0f, 30.0f, 0.00f, 0.800f, 0.00f, 0.000f, 1,  2, false, false, true,  25.0f, 30.0f, 45.0f, RED },
+        { WeaponId::GADGET_FLASH, "GRANADA FLASHBANG",    5.0f, 30.0f, 0.00f, 0.800f, 0.00f, 0.000f, 1,  2, false, false, true,  15.0f, 20.0f, 55.0f, SKYBLUE }
     }};
     size_t idx = std::min(static_cast<size_t>(id), table.size() - 1);
     return table[idx];
@@ -250,11 +251,23 @@ inline void UpdateGrenades(float dt, std::vector<ThrownGrenade>& grenades,
     }
 }
 
+namespace detail {
+    template <typename T, typename = void>
+    struct HasDrawWeaponViewmodel : std::false_type {};
+
+    template <typename T>
+    struct HasDrawWeaponViewmodel<T, std::void_t<decltype(std::declval<const T&>().DrawWeaponViewmodel(WeaponId::RIFLE, false))>> : std::true_type {};
+}
+
 class ViewmodelWeapon {
 public:
     int currentSlot = 1;
     int primarySubIndex = 0;
     int secondarySubIndex = 0;
+
+    // Restrição de Loadout (SAVEPOINT_22+): trava slots às escolhas do briefing
+    bool restrictToLoadout = false;
+    int equippedGadgetSlot = 4; // 4 = Frag M67, 5 = Flashbang
 
     std::array<int, static_cast<size_t>(WeaponId::COUNT)> ammo = { 30, 8, 80, 15, 6, 1, 2, 2 };
     float fireCooldown = 0.0f;
@@ -270,6 +283,13 @@ public:
 
     static const WeaponStats& GetStatsById(WeaponId id) {
         return GetWeaponStats(id);
+    }
+
+    bool IsSlotAllowed(int slot) const {
+        if (slot < 1 || slot > 5) return false;
+        if (!restrictToLoadout) return true;
+        if (slot == 4 || slot == 5) return slot == equippedGadgetSlot;
+        return true;
     }
 
     WeaponId GetCurrentWeaponId() const {
@@ -295,10 +315,13 @@ public:
     }
 
     void SelectSlot(int slot) {
-        if (slot < 1 || slot > 5) return;
+        if (!IsSlotAllowed(slot)) return;
+
         if (currentSlot == slot) {
-            if (slot == 1) primarySubIndex = (primarySubIndex + 1) % 3;
-            else if (slot == 2) secondarySubIndex = (secondarySubIndex + 1) % 2;
+            if (!restrictToLoadout) {
+                if (slot == 1) primarySubIndex = (primarySubIndex + 1) % 3;
+                else if (slot == 2) secondarySubIndex = (secondarySubIndex + 1) % 2;
+            }
         } else {
             currentSlot = slot;
         }
@@ -307,12 +330,19 @@ public:
     }
 
     void CycleNextWeapon(int dir) {
-        int next = currentSlot + (dir >= 0 ? 1 : -1);
-        if (next > 5) next = 1;
-        if (next < 1) next = 5;
-        currentSlot = next;
-        isReloading = false;
-        reloadTimer = 0.0f;
+        int step = (dir >= 0) ? 1 : -1;
+        int candidate = currentSlot;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            candidate += step;
+            if (candidate > 5) candidate = 1;
+            if (candidate < 1) candidate = 5;
+            if (IsSlotAllowed(candidate)) {
+                currentSlot = candidate;
+                isReloading = false;
+                reloadTimer = 0.0f;
+                return;
+            }
+        }
     }
 
     bool StartReload() {
@@ -339,8 +369,8 @@ public:
             size_t idx = static_cast<size_t>(st.id);
             if (ammo[idx] > 0) ammo[idx]--;
         }
-        recoilZ = st.isMelee ? -0.14f : 0.065f;
-        recoilPitch = st.isMelee ? -0.18f : 0.08f;
+        recoilZ = st.isMelee ? -0.16f : 0.068f;
+        recoilPitch = st.isMelee ? -0.22f : 0.085f;
         if (!st.isMelee && !st.isGrenade) {
             muzzleFlashTimer = 0.045f;
         }
@@ -384,39 +414,177 @@ public:
 
     template <typename AssetMgr>
     void Draw(const Camera3D& camera, bool isStealthFlank, const AssetMgr& assets) const {
-        (void)assets;
         const WeaponStats& st = GetCurrentStats();
         Matrix camToWorld = MatrixInvert(GetCameraMatrix(camera));
 
-        float bobX = std::cos(bobTimer * 0.5f) * 0.012f;
-        float bobY = std::fabs(std::sin(bobTimer)) * 0.014f;
-        float reloadDrop = isReloading ? -0.14f : 0.0f;
+        float bobX = std::cos(bobTimer * 0.5f) * 0.011f;
+        float bobY = std::fabs(std::sin(bobTimer)) * 0.013f;
+        float reloadDrop = isReloading ? -0.15f : 0.0f;
+        float reloadRoll = isReloading ? -22.0f : 0.0f;
 
         rlPushMatrix();
         rlMultMatrixf(MatrixToFloat(camToWorld));
-        rlTranslatef(0.24f + swayX + bobX, -0.22f + swayY - bobY + reloadDrop, -0.45f + recoilZ);
+        rlTranslatef(0.24f + swayX + bobX, -0.22f + swayY - bobY + reloadDrop, -0.44f + recoilZ);
         rlRotatef(recoilPitch * RAD2DEG, 1.0f, 0.0f, 0.0f);
+        rlRotatef(reloadRoll, 0.0f, 0.0f, 1.0f);
 
-        Color bodyCol = Color{ 44, 50, 62, 255 };
-        Color ledCol = isStealthFlank ? SKYBLUE : st.accentColor;
-
-        if (st.isMelee) {
-            DrawCube({ 0.0f, 0.0f, -0.08f }, 0.03f, 0.04f, 0.28f, LIGHTGRAY);
-            DrawCube({ 0.0f, 0.0f,  0.08f }, 0.04f, 0.05f, 0.12f, DARKGRAY);
-        } else if (st.isGrenade) {
-            DrawSphere({ 0.0f, 0.0f, 0.0f }, 0.075f, st.id == WeaponId::GADGET_FLASH ? SKYBLUE : DARKGREEN);
-            DrawSphereWires({ 0.0f, 0.0f, 0.0f }, 0.078f, 6, 6, ledCol);
-        } else {
-            float barrelLen = (st.id == WeaponId::LMG || st.id == WeaponId::RIFLE) ? 0.44f : 0.24f;
-            DrawCube({ 0.0f, 0.0f, 0.0f }, 0.065f, 0.085f, barrelLen, bodyCol);
-            DrawCubeWires({ 0.0f, 0.0f, 0.0f }, 0.066f, 0.086f, barrelLen, BLACK);
-            DrawCube({ 0.0f, 0.048f, -0.02f }, 0.028f, 0.016f, barrelLen * 0.65f, ledCol);
-
-            if (muzzleFlashTimer > 0.0f) {
-                DrawSphere({ 0.0f, 0.01f, -barrelLen * 0.5f - 0.06f }, 0.055f, Fade(YELLOW, 0.85f));
+        bool drewExternal = false;
+        if constexpr (detail::HasDrawWeaponViewmodel<AssetMgr>::value) {
+            using RetT = decltype(assets.DrawWeaponViewmodel(st.id, isStealthFlank));
+            if constexpr (std::is_same_v<RetT, bool>) {
+                drewExternal = assets.DrawWeaponViewmodel(st.id, isStealthFlank);
+            } else {
+                assets.DrawWeaponViewmodel(st.id, isStealthFlank);
+                drewExternal = true;
             }
         }
 
+        if (!drewExternal) {
+            DrawProceduralWeaponModel(st.id, isStealthFlank ? SKYBLUE : st.accentColor);
+        }
+
+        if (muzzleFlashTimer > 0.0f && !st.isMelee && !st.isGrenade) {
+            float flashZ = GetBarrelTipZ(st.id);
+            DrawSphere({ 0.0f, 0.018f, flashZ - 0.04f }, 0.052f, Fade(YELLOW, 0.88f));
+            DrawSphere({ 0.0f, 0.018f, flashZ - 0.09f }, 0.028f, Fade(WHITE, 0.92f));
+        }
+
         rlPopMatrix();
+    }
+
+private:
+    static float GetBarrelTipZ(WeaponId id) {
+        switch (id) {
+            case WeaponId::RIFLE:    return -0.44f;
+            case WeaponId::SHOTGUN:  return -0.46f;
+            case WeaponId::LMG:      return -0.50f;
+            case WeaponId::PISTOL:   return -0.22f;
+            case WeaponId::REVOLVER: return -0.28f;
+            default:                 return -0.25f;
+        }
+    }
+
+    static void DrawProceduralWeaponModel(WeaponId id, Color ledCol) {
+        Color darkMetal  = Color{ 38, 43, 52, 255 };
+        Color gunMetal   = Color{ 56, 63, 76, 255 };
+        Color polymer    = Color{ 30, 33, 40, 255 };
+        Color steel      = Color{ 140, 148, 160, 255 };
+        Color woodGrip   = Color{ 108, 68, 42, 255 };
+
+        switch (id) {
+            case WeaponId::RIFLE: {
+                // Corpo principal (Upper + Lower receiver)
+                DrawCube({ 0.0f, 0.01f, -0.02f }, 0.052f, 0.072f, 0.28f, gunMetal);
+                DrawCubeWires({ 0.0f, 0.01f, -0.02f }, 0.053f, 0.073f, 0.28f, BLACK);
+                // Guarda-mão tático (Handguard)
+                DrawCube({ 0.0f, 0.014f, -0.24f }, 0.046f, 0.056f, 0.22f, darkMetal);
+                DrawCubeWires({ 0.0f, 0.014f, -0.24f }, 0.047f, 0.057f, 0.22f, BLACK);
+                // Cano e quebra-chamas
+                DrawCube({ 0.0f, 0.018f, -0.39f }, 0.018f, 0.018f, 0.12f, steel);
+                DrawCube({ 0.0f, 0.018f, -0.44f }, 0.024f, 0.024f, 0.035f, darkMetal);
+                // Coronha
+                DrawCube({ 0.0f, 0.00f, 0.19f }, 0.042f, 0.085f, 0.16f, polymer);
+                // Empunhadura (Pistol Grip)
+                DrawCube({ 0.0f, -0.065f, 0.06f }, 0.036f, 0.095f, 0.045f, polymer);
+                // Carregador 5.56
+                DrawCube({ 0.0f, -0.085f, -0.07f }, 0.034f, 0.13f, 0.065f, darkMetal);
+                DrawCubeWires({ 0.0f, -0.085f, -0.07f }, 0.035f, 0.13f, 0.066f, BLACK);
+                // Mira Holográfica + LED de estado
+                DrawCube({ 0.0f, 0.062f, -0.03f }, 0.042f, 0.036f, 0.075f, polymer);
+                DrawCube({ 0.0f, 0.068f, -0.03f }, 0.024f, 0.018f, 0.078f, Fade(ledCol, 0.85f));
+                break;
+            }
+            case WeaponId::SHOTGUN: {
+                // Caixa da culatra
+                DrawCube({ 0.0f, 0.01f, -0.03f }, 0.056f, 0.076f, 0.26f, darkMetal);
+                DrawCubeWires({ 0.0f, 0.01f, -0.03f }, 0.057f, 0.077f, 0.26f, BLACK);
+                // Cano superior calibre 12
+                DrawCube({ 0.0f, 0.028f, -0.29f }, 0.026f, 0.026f, 0.34f, gunMetal);
+                // Tubo carregador inferior
+                DrawCube({ 0.0f, -0.002f, -0.27f }, 0.024f, 0.024f, 0.30f, steel);
+                // Telha deslizante (Pump)
+                DrawCube({ 0.0f, -0.005f, -0.24f }, 0.048f, 0.048f, 0.15f, polymer);
+                DrawCubeWires({ 0.0f, -0.005f, -0.24f }, 0.049f, 0.049f, 0.15f, BLACK);
+                // Coronha
+                DrawCube({ 0.0f, -0.015f, 0.18f }, 0.044f, 0.092f, 0.18f, polymer);
+                // Massa de mira com fibra LED
+                DrawCube({ 0.0f, 0.046f, -0.44f }, 0.012f, 0.014f, 0.02f, ledCol);
+                break;
+            }
+            case WeaponId::LMG: {
+                // Corpo pesado M249
+                DrawCube({ 0.0f, 0.015f, -0.04f }, 0.074f, 0.095f, 0.34f, gunMetal);
+                DrawCubeWires({ 0.0f, 0.015f, -0.04f }, 0.075f, 0.096f, 0.34f, BLACK);
+                // Guarda-mão ventilado e cano pesado
+                DrawCube({ 0.0f, 0.012f, -0.29f }, 0.062f, 0.068f, 0.24f, darkMetal);
+                DrawCube({ 0.0f, 0.024f, -0.44f }, 0.026f, 0.026f, 0.14f, steel);
+                // Tambor de munição (Box Mag)
+                DrawCube({ -0.035f, -0.075f, -0.08f }, 0.095f, 0.11f, 0.12f, Color{ 62, 76, 54, 255 });
+                DrawCubeWires({ -0.035f, -0.075f, -0.08f }, 0.096f, 0.11f, 0.12f, BLACK);
+                // Coronha tubular pesada
+                DrawCube({ 0.0f, 0.00f, 0.21f }, 0.052f, 0.095f, 0.18f, polymer);
+                // Trilho superior com LED
+                DrawCube({ 0.0f, 0.068f, -0.05f }, 0.044f, 0.016f, 0.22f, ledCol);
+                break;
+            }
+            case WeaponId::PISTOL: {
+                // Ferrolho (Slide)
+                DrawCube({ 0.0f, 0.024f, -0.08f }, 0.036f, 0.038f, 0.22f, gunMetal);
+                DrawCubeWires({ 0.0f, 0.024f, -0.08f }, 0.037f, 0.039f, 0.22f, BLACK);
+                // Armação inferior (Frame)
+                DrawCube({ 0.0f, 0.000f, -0.07f }, 0.032f, 0.022f, 0.20f, polymer);
+                // Cabo (Grip)
+                DrawCube({ 0.0f, -0.055f, 0.00f }, 0.034f, 0.095f, 0.048f, polymer);
+                // Alça e massa de mira luminosa
+                DrawCube({ 0.0f, 0.048f, 0.01f }, 0.026f, 0.012f, 0.016f, ledCol);
+                DrawCube({ 0.0f, 0.048f, -0.17f }, 0.010f, 0.012f, 0.016f, ledCol);
+                break;
+            }
+            case WeaponId::REVOLVER: {
+                // Cano longo nervurado .44 Magnum
+                DrawCube({ 0.0f, 0.028f, -0.15f }, 0.028f, 0.036f, 0.24f, steel);
+                DrawCubeWires({ 0.0f, 0.028f, -0.15f }, 0.029f, 0.037f, 0.24f, BLACK);
+                // Tambor giratório (Cylinder)
+                DrawCube({ 0.0f, 0.012f, -0.01f }, 0.052f, 0.052f, 0.068f, darkMetal);
+                DrawCubeWires({ 0.0f, 0.012f, -0.01f }, 0.053f, 0.053f, 0.069f, BLACK);
+                // Armação e cabo de madeira
+                DrawCube({ 0.0f, 0.010f, 0.04f }, 0.032f, 0.045f, 0.06f, steel);
+                DrawCube({ 0.0f, -0.048f, 0.06f }, 0.036f, 0.095f, 0.052f, woodGrip);
+                // Massa de mira frontal
+                DrawCube({ 0.0f, 0.052f, -0.25f }, 0.010f, 0.014f, 0.022f, ledCol);
+                break;
+            }
+            case WeaponId::MELEE_KNIFE: {
+                // Cabo tático
+                DrawCube({ 0.0f, -0.02f, 0.04f }, 0.032f, 0.042f, 0.13f, polymer);
+                // Guarda de proteção
+                DrawCube({ 0.0f, -0.015f, -0.03f }, 0.052f, 0.062f, 0.016f, darkMetal);
+                // Lâmina metálica com fio luminoso
+                DrawCube({ 0.0f, -0.012f, -0.15f }, 0.010f, 0.034f, 0.22f, steel);
+                DrawCubeWires({ 0.0f, -0.012f, -0.15f }, 0.011f, 0.035f, 0.22f, BLACK);
+                DrawCube({ 0.0f, 0.006f, -0.15f }, 0.008f, 0.006f, 0.21f, ledCol);
+                break;
+            }
+            case WeaponId::GADGET_FRAG: {
+                // Corpo esférico da M67
+                DrawSphere({ 0.0f, -0.02f, -0.04f }, 0.068f, Color{ 64, 84, 56, 255 });
+                DrawSphereWires({ 0.0f, -0.02f, -0.04f }, 0.070f, 8, 8, BLACK);
+                // Espoleta superior e alavanca
+                DrawCube({ 0.0f, 0.055f, -0.04f }, 0.028f, 0.026f, 0.028f, steel);
+                DrawCube({ 0.026f, 0.015f, -0.04f }, 0.012f, 0.085f, 0.022f, ledCol);
+                break;
+            }
+            case WeaponId::GADGET_FLASH:
+            default: {
+                // Cilindro metálico da Flashbang
+                DrawCylinder({ 0.0f, -0.085f, -0.04f }, 0.042f, 0.042f, 0.15f, 12, gunMetal);
+                DrawCylinderWires({ 0.0f, -0.085f, -0.04f }, 0.043f, 0.043f, 0.15f, 12, BLACK);
+                // Faixa tática azul
+                DrawCylinder({ 0.0f, -0.035f, -0.04f }, 0.044f, 0.044f, 0.035f, 12, ledCol);
+                // Espoleta superior
+                DrawCube({ 0.0f, 0.075f, -0.04f }, 0.026f, 0.024f, 0.026f, steel);
+                break;
+            }
+        }
     }
 };

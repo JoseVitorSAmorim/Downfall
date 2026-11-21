@@ -10,6 +10,8 @@
 #include "Cutscene.hpp"
 #include "SaveSystem.hpp"
 #include "Network.hpp"
+#include "Events.hpp"
+#include "Combatant.hpp"
 #include <type_traits>
 
 template <typename T, typename = void> struct HasShootTimer : std::false_type {};
@@ -88,8 +90,112 @@ Vector3 GetSquadSpawnPosition(int slot) {
     }
 }
 
+// =============================================================================
+// REGISTRO DESACOPLADO DE LISTENERS NO EVENT BUS (SAVEPOINT_22)
+// =============================================================================
+void RegisterCoreEventListeners(ProceduralAudio& audio, SaveSystem& saveSystem,
+                                MissionManager& mission, HitmarkerFeedback& hitmarker,
+                                std::vector<DamageIndicator>& damageIndicators,
+                                LanNetworkManager& net) {
+    EventManager::ResetAllChannels();
+
+    // 1. Subsistema de Áudio 2D / Espacial 3D
+    EventManager::Subscribe<WeaponFiredEvent>([&audio, &net](const WeaponFiredEvent& ev) {
+        int localSlot = net.IsClient() ? net.localSlot : 0;
+        if (ev.shooterSlot == localSlot) {
+            audio.PlayWeaponAction(static_cast<WeaponId>(ev.weaponId), ev.isStealthFlank);
+        } else {
+            SfxId sfx = ev.isEnemy ? SfxId::RIFLE : SfxId::LMG;
+            float pitch = ev.isEnemy ? 0.93f : 1.07f;
+            audio.Play3D(sfx, ev.muzzlePos, 0.68f, pitch, 48.0f);
+        }
+    });
+
+    EventManager::Subscribe<ExplosionTriggeredEvent>([&audio](const ExplosionTriggeredEvent& ev) {
+        audio.PlayExplosion3D(ev.pos, ev.isFlashbang);
+    });
+
+    EventManager::Subscribe<CombatantDownedEvent>([&audio](const CombatantDownedEvent&) {
+        audio.PlayDownedAlert();
+    });
+
+    EventManager::Subscribe<CombatantRevivedEvent>([&audio](const CombatantRevivedEvent&) {
+        audio.PlayRevive();
+    });
+
+    EventManager::Subscribe<ObjectiveCompletedEvent>([&audio](const ObjectiveCompletedEvent&) {
+        audio.PlayOrder();
+    });
+
+    // 2. Subsistema de Missão & Estatísticas
+    EventManager::Subscribe<EnemyKilledEvent>([&mission](const EnemyKilledEvent& ev) {
+        mission.stats.enemiesEliminated++;
+        if (ev.isHeadshot) {
+            mission.stats.headshotsLanded++;
+        }
+    });
+
+    // 3. Subsistema de Save Persistente
+    EventManager::Subscribe<ObjectiveCompletedEvent>([&saveSystem](const ObjectiveCompletedEvent& ev) {
+        if (ev.type == ObjectiveEventType::MISSION_VICTORY) {
+            saveSystem.RecordMissionVictory(ev.phase, ev.totalKills, ev.totalHeadshots);
+        }
+    });
+
+    // 4. Subsistema de Feedback Visual (Hitmarker + Indicador Direcional de Dano)
+    EventManager::Subscribe<DamageDealtEvent>([&hitmarker, &damageIndicators, &net](const DamageDealtEvent& ev) {
+        int localSlot = net.IsClient() ? net.localSlot : 0;
+
+        if (ev.targetIsEnemy && ev.attackerSlot == localSlot) {
+            hitmarker.timer = hitmarker.maxDuration;
+            if (ev.isHeadshot) {
+                hitmarker.color = GOLD;
+                hitmarker.callout = ev.isWallbang ? "WALLBANG HEADSHOT! (2.5x)" : "HEADSHOT! (2.5x)";
+            } else if (ev.isExplosion) {
+                hitmarker.color = ORANGE;
+                hitmarker.callout = "DANO EM AREA";
+            } else if (ev.isWallbang) {
+                hitmarker.color = ORANGE;
+                hitmarker.callout = "WALLBANG!";
+            } else {
+                hitmarker.color = RAYWHITE;
+                hitmarker.callout = "";
+            }
+        } else if (!ev.targetIsEnemy && ev.targetId == localSlot && ev.attackerSlot != localSlot) {
+            damageIndicators.push_back({ ev.attackerPos, 0.65f });
+        }
+    });
+
+    EventManager::Subscribe<EnemyKilledEvent>([&hitmarker, &net](const EnemyKilledEvent& ev) {
+        int localSlot = net.IsClient() ? net.localSlot : 0;
+        if (ev.killerSlot == localSlot) {
+            hitmarker.timer = 0.26f;
+            hitmarker.color = RED;
+            hitmarker.callout = ev.isExplosion ? "EXPLOSAO! ABATE"
+                              : (ev.isHeadshot ? "HEADSHOT! ABATE"
+                              : (ev.isWallbang ? "WALLBANG! ABATE" : "ELIMINADO"));
+        }
+    });
+
+    // 5. Subsistema de Replicação LAN (Host Autoritativo)
+    EventManager::Subscribe<WeaponFiredEvent>([&net](const WeaponFiredEvent& ev) {
+        if (net.IsHost() && !ev.isMelee) {
+            uint8_t src = static_cast<uint8_t>(ev.shooterSlot);
+            net.QueueEvent(NetEventType::SHOT_TRACER, src, ev.muzzlePos, ev.endPos, ev.isStealthFlank ? 1 : 0);
+        }
+    });
+
+    EventManager::Subscribe<ExplosionTriggeredEvent>([&net](const ExplosionTriggeredEvent& ev) {
+        if (net.IsHost()) {
+            uint8_t src = static_cast<uint8_t>(ev.sourceSlot);
+            net.QueueEvent(NetEventType::EXPLOSION, src, ev.pos, ev.pos, ev.isFlashbang ? 1 : 0);
+        }
+    });
+}
+
 void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePlayer& player,
                         ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
+                        SquadRoster& roster,
                         std::vector<EnemyBot>& enemies, std::vector<Tracer>& tracers,
                         std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
                         std::vector<DamageIndicator>& damageIndicators,
@@ -97,9 +203,11 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
                         HitmarkerFeedback& hitmarker, MissionManager& mission,
                         CutsceneManager& cutscenes, Camera3D& camera, ProceduralAudio& audio,
                         const SaveSystem& saveSystem, const LanNetworkManager& net) {
+    bool isTacticalMission = false;
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
     saveSystem.ApplyLoadoutToWeapon(weapon);
+    weapon.equippedGadgetSlot = (saveSystem.data.gadgetIndex == 1) ? 5 : 4;
 
     tracers.clear();
     grenades.clear();
@@ -126,6 +234,7 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         ResetWave(enemies);
         mission.SetupForMode(false, true);
     } else {
+        isTacticalMission = true;
         world = LevelLoader::LoadFromFile("mapa_squad.txt", MapPreset::SQUAD_ARENA);
 
         if (net.IsClient()) {
@@ -170,6 +279,11 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         mission.SetupForMode(true, false);
     }
 
+    weapon.restrictToLoadout = isTacticalMission;
+
+    int localSlot = net.IsClient() ? net.localSlot : 0;
+    roster.InitializeFromEntities(player, weapon, allies, localSlot);
+
     Vector3 eye = player.GetEyePosition();
     Vector3 target = Vector3Add(eye, player.GetForward3D());
     camera.position = eye;
@@ -192,25 +306,13 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 }
 
 WeaponStats GetWeaponStatsById(WeaponId id) {
-    ViewmodelWeapon temp;
-    for (int slot = 1; slot <= 5; slot++) {
-        temp.SelectSlot(slot);
-        for (int sub = 0; sub < 4; sub++) {
-            if (temp.GetCurrentStats().id == id) {
-                return temp.GetCurrentStats();
-            }
-            temp.SelectSlot(slot);
-        }
-    }
-    temp.SelectSlot(1);
-    return temp.GetCurrentStats();
+    return GetWeaponStats(id);
 }
 
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-    InitWindow(1280, 720, "Squad Tactical Shooter - Multiplayer LAN UDP (SAVEPOINT_19)");
+    InitWindow(1280, 720, "Squad Tactical Shooter - Event Bus & Unified Combatant (SAVEPOINT_22)");
 
-    // Auto-ajusta para a resolução nativa do monitor e ativa Tela Cheia
     int monitor = GetCurrentMonitor();
     int nativeW = GetMonitorWidth(monitor);
     int nativeH = GetMonitorHeight(monitor);
@@ -247,6 +349,7 @@ int main() {
     SourcePlayer player;
     ViewmodelWeapon weapon;
     std::vector<SquadAlly> allies;
+    SquadRoster roster;
     std::vector<EnemyBot> enemies;
     std::vector<Tracer> tracers;
     std::vector<ThrownGrenade> grenades;
@@ -262,6 +365,9 @@ int main() {
     float reloadAssetsBannerTimer = 0.0f;
     float playerStepTimer = 0.0f;
     float botStepTimer = 0.0f;
+
+    // Registra todos os subsistemas no barramento de eventos
+    RegisterCoreEventListeners(audio, saveSystem, mission, hitmarker, damageIndicators, net);
 
     Camera3D camera = {};
     camera.up = { 0.0f, 1.0f, 0.0f };
@@ -338,7 +444,7 @@ int main() {
                 currentMode = chosen;
                 victoryRecordedForRun = false;
                 hostSnapshotTick = 0;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
+                InitializeTestMode(currentMode, world, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
                 menu.ReturnToMain();
                 DisableCursor();
             }
@@ -381,7 +487,7 @@ int main() {
         }
 
         // =====================================================================
-        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D (SINGLEPLAYER OU CO-OP LAN)
+        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D (EVENT-DRIVEN + ROSTER UNIFICADO)
         // =====================================================================
         if (IsKeyPressed(KEY_ESCAPE)) {
             cutscenes.Skip();
@@ -396,7 +502,7 @@ int main() {
 
         if (IsKeyPressed(KEY_F5) && !net.IsClient()) {
             victoryRecordedForRun = false;
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
+            InitializeTestMode(currentMode, world, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
         }
 
         if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying() && !net.IsActive()) {
@@ -415,12 +521,21 @@ int main() {
             audio.PlayOrder();
         }
 
+        // Dispara evento de conclusão de missão para SaveSystem e Áudio
         if (mission.state == MissionState::VICTORY && !victoryRecordedForRun) {
             victoryRecordedForRun = true;
-            saveSystem.RecordMissionVictory(saveSystem.data.selectedPhase, mission.stats.enemiesEliminated, mission.stats.headshotsLanded);
+            EventManager::Emit(ObjectiveCompletedEvent{
+                ObjectiveEventType::MISSION_VICTORY,
+                0,
+                saveSystem.data.selectedPhase,
+                mission.stats.enemiesEliminated,
+                mission.stats.headshotsLanded,
+                player.pos
+            });
         }
 
         bool missionEnded = (mission.state == MissionState::VICTORY || mission.state == MissionState::DEFEAT);
+        int localSlot = net.IsClient() ? net.localSlot : 0;
 
         Vector3 preEye = player.GetEyePosition();
         Vector3 preTarget = Vector3Add(preEye, player.GetForward3D());
@@ -485,7 +600,7 @@ int main() {
             if (player.pos.y < -20.0f) {
                 player.pos = (currentMode == GameMode::MOVEMENT_TEST)
                     ? Vector3{ 0.0f, 0.5f, 20.0f }
-                    : GetSquadSpawnPosition(net.IsClient() ? net.localSlot : 0);
+                    : GetSquadSpawnPosition(localSlot);
                 player.vel = { 0.0f, 0.0f, 0.0f };
             }
 
@@ -550,31 +665,10 @@ int main() {
                         savedHumanPos[s - 1] = ally.pos;
                         savedHumanCrouched[s - 1] = crouched;
 
+                        roster.SyncFromEntities(player, weapon, allies, 0);
                         if ((inPkt.flags & (1 << 2)) && !ally.isDowned) {
-                            if (player.isDowned && Vector3Distance(ally.pos, player.pos) < 3.0f) {
-                                player.reviveProgress += dt * 0.42f;
-                                if (player.reviveProgress >= 1.0f) {
-                                    player.isDowned = false;
-                                    player.hp = 75.0f;
-                                    player.reviveProgress = 0.0f;
-                                    audio.PlayRevive();
-                                }
-                            }
-                            for (size_t other = 0; other < allies.size(); other++) {
-                                if ((int)other == (s - 1) || !allies[other].isDowned) continue;
-                                if (Vector3Distance(ally.pos, allies[other].pos) < 3.0f) {
-                                    allies[other].reviveProgress += dt * 0.42f;
-                                    if (allies[other].reviveProgress >= 1.0f) {
-                                        allies[other].isDowned = false;
-                                        allies[other].hp = 75.0f;
-                                        allies[other].lastHp = 75.0f;
-                                        allies[other].reviveProgress = 0.0f;
-                                        allies[other].bleedoutTimer = 25.0f;
-                                        allies[other].anchorPos = allies[other].pos;
-                                        audio.PlayRevive();
-                                    }
-                                }
-                            }
+                            roster.TryReviveNearby(s, dt, 3.0f);
+                            roster.PushToEntities(player, weapon, allies, 0);
                         }
 
                         if (net.clientSlots[s].hasPendingShot) {
@@ -598,7 +692,7 @@ int main() {
                                         RayCollision bCol = GetRayCollisionBox(ray, mission.barrels[barrelIdx].GetAABB());
                                         if (!cStats.isMelee) {
                                             tracers.push_back({ cMuzzle, bCol.point, ally.color, 0.09f });
-                                            net.QueueEvent(NetEventType::SHOT_TRACER, (uint8_t)s, cMuzzle, bCol.point);
+                                            EventManager::Emit(WeaponFiredEvent{ s, (int)cStats.id, cMuzzle, bCol.point, false, false, false, ally.color });
                                         }
                                         mission.DamageBarrel(barrelIdx, cStats.damage, explosions);
                                         continue;
@@ -606,17 +700,24 @@ int main() {
 
                                     if (!cStats.isMelee) {
                                         tracers.push_back({ cMuzzle, hitRes.endPoint, ally.color, 0.09f });
-                                        net.QueueEvent(NetEventType::SHOT_TRACER, (uint8_t)s, cMuzzle, hitRes.endPoint);
+                                        EventManager::Emit(WeaponFiredEvent{ s, (int)cStats.id, cMuzzle, hitRes.endPoint, false, false, false, ally.color });
                                     }
 
                                     if (hitRes.hitEnemyIdx != -1) {
                                         EnemyBot& targetEnemy = enemies[hitRes.hitEnemyIdx];
                                         bool wasAlive = targetEnemy.IsAlive();
-                                        targetEnemy.hp -= cStats.damage * hitRes.damageMultiplier;
+                                        float dmg = cStats.damage * hitRes.damageMultiplier;
+                                        targetEnemy.hp -= dmg;
                                         targetEnemy.suppression = std::min(100.0f, targetEnemy.suppression + cStats.suppressionOnHit);
                                         ally.aggro = std::min(100.0f, ally.aggro + cStats.aggroOnHit);
+
+                                        EventManager::Emit(DamageDealtEvent{
+                                            s, targetEnemy.id, true, dmg, hitRes.isHeadshot, hitRes.didWallbang, false, false, hitRes.endPoint, ally.pos
+                                        });
                                         if (wasAlive && !targetEnemy.IsAlive()) {
-                                            mission.stats.enemiesEliminated++;
+                                            EventManager::Emit(EnemyKilledEvent{
+                                                s, targetEnemy.id, targetEnemy.pos, hitRes.isHeadshot, hitRes.didWallbang, false
+                                            });
                                         }
                                     }
                                 }
@@ -646,6 +747,8 @@ int main() {
                     }
                 }
 
+                // Arrasto e Reanimação Unificados via SquadRoster
+                roster.SyncFromEntities(player, weapon, allies, 0);
                 if (!player.isDowned && !allies.empty()) {
                     if (IsKeyDown(KEY_E)) {
                         if (player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
@@ -666,23 +769,13 @@ int main() {
                         player.draggingAllyId = -1;
                     }
 
-                    if (IsKeyDown(KEY_F) && player.draggingAllyId == -1 && nearbyDownedIdx != -1) {
-                        SquadAlly& target = allies[nearbyDownedIdx];
-                        target.reviveProgress += dt * 0.42f;
-                        if (target.reviveProgress >= 1.0f) {
-                            target.isDowned = false;
-                            target.hp = 75.0f;
-                            target.lastHp = 75.0f;
-                            target.reviveProgress = 0.0f;
-                            target.bleedoutTimer = 25.0f;
-                            target.anchorPos = target.pos;
-                            audio.PlayRevive();
-                        }
-                    } else {
-                        for (auto& ally : allies) {
-                            if (ally.isDowned) ally.reviveProgress = std::max(0.0f, ally.reviveProgress - dt * 0.5f);
+                    bool reviving = (IsKeyDown(KEY_F) && player.draggingAllyId == -1 && roster.TryReviveNearby(0, dt, 2.8f));
+                    if (!reviving) {
+                        for (int s = 1; s < roster.activeCount; s++) {
+                            roster.members[s].DecayRevive(dt);
                         }
                     }
+                    roster.PushToEntities(player, weapon, allies, 0);
                 }
 
                 mission.Update(dt, player, weapon, allies, enemies, (nearbyDownedIdx != -1), audio);
@@ -700,11 +793,8 @@ int main() {
                     }
                 }
 
-                float maxAllyAggro = 0.0f;
-                for (const auto& ally : allies) {
-                    if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
-                }
-                bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
+                roster.SyncFromEntities(player, weapon, allies, 0);
+                bool isStealthFlank = roster.IsStealthFlankActive(0);
 
                 const WeaponStats& wStats = weapon.GetCurrentStats();
                 bool triggerPulled = wStats.isAutomatic
@@ -714,7 +804,6 @@ int main() {
                 if (triggerPulled) {
                     if (weapon.CanFire()) {
                         weapon.ConsumeAndAnimateFire();
-                        audio.PlayWeaponAction(wStats.id, isStealthFlank);
 
                         if (!player.isDowned && !enemies.empty()) {
                             player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnFire);
@@ -726,14 +815,10 @@ int main() {
                             Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
                             throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
                             grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
+                            EventManager::Emit(WeaponFiredEvent{ 0, (int)wStats.id, spawnPos, spawnPos, false, isStealthFlank, false, wStats.accentColor });
                         } else {
                             Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(listenerRight, 0.24f), { 0, -0.18f, 0 }));
-
-                            bool anyHit = false;
-                            bool anyHeadshot = false;
-                            bool anyWallbang = false;
-                            bool anyKill = false;
-                            bool hitBarrel = false;
+                            Vector3 lastEnd = Vector3Add(eyePos, Vector3Scale(forward, wStats.range));
 
                             for (int p = 0; p < wStats.pelletCount; p++) {
                                 Vector3 shotDir = ApplySpreadToDirection(forward, wStats.spread);
@@ -741,24 +826,24 @@ int main() {
 
                                 BallisticHitResult hitRes = TraceBallisticShot(ray, wStats.range, wStats.penetrationPower, world, enemies);
                                 float shotDist = Vector3Distance(eyePos, hitRes.endPoint);
+                                lastEnd = hitRes.endPoint;
 
                                 int barrelIdx = mission.CheckBarrelShot(ray, shotDist);
                                 if (barrelIdx != -1) {
                                     RayCollision bCol = GetRayCollisionBox(ray, mission.barrels[barrelIdx].GetAABB());
                                     if (!wStats.isMelee) {
                                         tracers.push_back({ muzzlePos, bCol.point, ORANGE, 0.085f });
-                                        net.QueueEvent(NetEventType::SHOT_TRACER, 0, muzzlePos, bCol.point, isStealthFlank ? 1 : 0);
                                     }
                                     mission.DamageBarrel(barrelIdx, wStats.damage, explosions);
-                                    anyHit = true;
-                                    hitBarrel = true;
+                                    hitmarker.timer = hitmarker.maxDuration;
+                                    hitmarker.color = ORANGE;
+                                    hitmarker.callout = "BARRIL EXPLOSIVO!";
                                     continue;
                                 }
 
                                 if (!wStats.isMelee) {
                                     Color shotColor = isStealthFlank ? SKYBLUE : (hitRes.didWallbang ? ORANGE : wStats.accentColor);
                                     tracers.push_back({ muzzlePos, hitRes.endPoint, shotColor, 0.085f });
-                                    net.QueueEvent(NetEventType::SHOT_TRACER, 0, muzzlePos, hitRes.endPoint, isStealthFlank ? 1 : 0);
 
                                     if (hitRes.hasPiercePoint) {
                                         Vector3 sparkEnd = Vector3Add(hitRes.piercePoint, Vector3Scale(shotDir, 0.45f));
@@ -780,38 +865,24 @@ int main() {
                                         player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnHit);
                                     }
 
-                                    anyHit = true;
-                                    if (hitRes.isHeadshot) {
-                                        anyHeadshot = true;
-                                        mission.stats.headshotsLanded++;
-                                    }
-                                    if (hitRes.didWallbang) anyWallbang = true;
+                                    EventManager::Emit(DamageDealtEvent{
+                                        0, targetEnemy.id, true, finalDamage,
+                                        hitRes.isHeadshot, hitRes.didWallbang, false, isStealthFlank,
+                                        hitRes.endPoint, player.pos
+                                    });
+
                                     if (wasAlive && !targetEnemy.IsAlive()) {
-                                        anyKill = true;
-                                        mission.stats.enemiesEliminated++;
+                                        EventManager::Emit(EnemyKilledEvent{
+                                            0, targetEnemy.id, targetEnemy.pos,
+                                            hitRes.isHeadshot, hitRes.didWallbang, false
+                                        });
                                     }
                                 }
                             }
 
-                            if (anyHit) {
-                                hitmarker.timer = hitmarker.maxDuration;
-                                if (anyKill) {
-                                    hitmarker.color = RED;
-                                    hitmarker.callout = anyHeadshot ? "HEADSHOT! ABATE" : (anyWallbang ? "WALLBANG! ABATE" : "ELIMINADO");
-                                } else if (anyHeadshot) {
-                                    hitmarker.color = GOLD;
-                                    hitmarker.callout = anyWallbang ? "WALLBANG HEADSHOT! (2.5x)" : "HEADSHOT! (2.5x)";
-                                } else if (hitBarrel) {
-                                    hitmarker.color = ORANGE;
-                                    hitmarker.callout = "BARRIL EXPLOSIVO!";
-                                } else if (anyWallbang) {
-                                    hitmarker.color = ORANGE;
-                                    hitmarker.callout = "WALLBANG!";
-                                } else {
-                                    hitmarker.color = RAYWHITE;
-                                    hitmarker.callout = "";
-                                }
-                            }
+                            EventManager::Emit(WeaponFiredEvent{
+                                0, (int)wStats.id, muzzlePos, lastEnd, wStats.isMelee, isStealthFlank, false, wStats.accentColor
+                            });
                         }
                     } else if (!weapon.isReloading && !wStats.isMelee && !wStats.isGrenade && weapon.GetCurrentAmmo() <= 0) {
                         if (weapon.StartReload()) {
@@ -825,16 +896,14 @@ int main() {
 
                 for (size_t e = prevExplosions; e < explosions.size(); e++) {
                     const ExplosionEffect exp = explosions[e];
-                    audio.PlayExplosion3D(exp.pos, exp.isFlashbang);
-                    net.QueueEvent(NetEventType::EXPLOSION, 0, exp.pos, exp.pos, exp.isFlashbang ? 1 : 0);
+                    EventManager::Emit(ExplosionTriggeredEvent{ 0, exp.pos, exp.maxRadius, exp.isFlashbang });
                     mission.CheckExplosionChain(exp, explosions);
 
-                    bool nadeHit = false;
-                    bool nadeKill = false;
                     for (auto& enemy : enemies) {
                         if (!enemy.IsAlive()) continue;
                         float dist = Vector3Distance(enemy.GetEyePos(), exp.pos);
                         if (dist <= exp.maxRadius) {
+                            bool wasAlive = enemy.IsAlive();
                             float falloff = 1.0f - (dist / exp.maxRadius) * 0.5f;
                             if (exp.isFlashbang) {
                                 enemy.hp -= 5.0f;
@@ -842,23 +911,24 @@ int main() {
                                 enemy.isSuppressed = true;
                                 enemy.coverSearchTimer = 0.0f;
                                 player.aggro = std::max(0.0f, player.aggro - 20.0f);
-                                nadeHit = true;
+                                EventManager::Emit(DamageDealtEvent{
+                                    0, enemy.id, true, 5.0f, false, false, true, false, enemy.GetEyePos(), exp.pos
+                                });
                             } else {
-                                enemy.hp -= 115.0f * falloff;
+                                float dmg = 115.0f * falloff;
+                                enemy.hp -= dmg;
                                 enemy.suppression = 100.0f;
                                 enemy.isSuppressed = true;
-                                nadeHit = true;
-                                if (!enemy.IsAlive()) {
-                                    nadeKill = true;
-                                    mission.stats.enemiesEliminated++;
+                                EventManager::Emit(DamageDealtEvent{
+                                    0, enemy.id, true, dmg, false, false, true, false, enemy.GetEyePos(), exp.pos
+                                });
+                                if (wasAlive && !enemy.IsAlive()) {
+                                    EventManager::Emit(EnemyKilledEvent{
+                                        0, enemy.id, enemy.pos, false, false, true
+                                    });
                                 }
                             }
                         }
-                    }
-                    if (nadeHit) {
-                        hitmarker.timer = 0.25f;
-                        hitmarker.color = nadeKill ? RED : ORANGE;
-                        hitmarker.callout = nadeKill ? "EXPLOSAO! ABATE" : (exp.isFlashbang ? "INIMIGO CEGADO!" : "DANO EM AREA");
                     }
                 }
 
@@ -888,12 +958,6 @@ int main() {
                     }
                     float decayRate = playerExposed ? 6.5f : 15.0f;
                     player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
-                }
-
-                bool prevPlayerDowned = player.isDowned;
-                std::vector<bool> prevAllyDowned(allies.size(), false);
-                for (size_t i = 0; i < allies.size(); i++) {
-                    prevAllyDowned[i] = allies[i].isDowned;
                 }
 
                 size_t prevTracers = tracers.size();
@@ -927,14 +991,6 @@ int main() {
                     UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
                 }
 
-                for (size_t t = prevTracers; t < tracers.size(); t++) {
-                    bool isEnemyShot = (tracers[t].color.r > 180 && tracers[t].color.b < 80);
-                    SfxId shotSfx = isEnemyShot ? SfxId::RIFLE : SfxId::LMG;
-                    float pitch = isEnemyShot ? 0.93f : 1.07f;
-                    audio.Play3D(shotSfx, tracers[t].start, 0.68f, pitch, 48.0f);
-                    net.QueueEvent(NetEventType::SHOT_TRACER, isEnemyShot ? 99 : 1, tracers[t].start, tracers[t].end);
-                }
-
                 botStepTimer += dt;
                 if (botStepTimer >= 0.45f) {
                     botStepTimer = 0.0f;
@@ -945,18 +1001,7 @@ int main() {
                     }
                 }
 
-                if (!prevPlayerDowned && player.isDowned) {
-                    audio.PlayDownedAlert();
-                } else if (prevPlayerDowned && !player.isDowned) {
-                    audio.PlayRevive();
-                }
-
-                for (size_t i = 0; i < allies.size(); i++) {
-                    if (!prevAllyDowned[i] && allies[i].isDowned) {
-                        audio.PlayDownedAlert();
-                        break;
-                    }
-                }
+                roster.SyncFromEntities(player, weapon, allies, 0);
             }
             // =================================================================
             // RAMO B: CLIENTE LAN (ENVIA INPUTS E APLICA SNAPSHOT DO HOST)
@@ -971,11 +1016,8 @@ int main() {
                     audio.PlayOrder();
                 }
 
-                float maxAllyAggro = 0.0f;
-                for (const auto& ally : allies) {
-                    if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
-                }
-                bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
+                roster.SyncFromEntities(player, weapon, allies, net.localSlot);
+                bool isStealthFlank = roster.IsStealthFlankActive(net.localSlot);
 
                 const WeaponStats& wStats = weapon.GetCurrentStats();
                 bool triggerPulled = wStats.isAutomatic
@@ -1002,9 +1044,11 @@ int main() {
                                 tracers.push_back({ muzzlePos, previewHit.endPoint, shotColor, 0.085f });
                             }
                             if (previewHit.hitEnemyIdx != -1) {
-                                hitmarker.timer = hitmarker.maxDuration;
-                                hitmarker.color = previewHit.isHeadshot ? GOLD : RAYWHITE;
-                                hitmarker.callout = previewHit.isHeadshot ? "HEADSHOT!" : "";
+                                EventManager::Emit(DamageDealtEvent{
+                                    net.localSlot, enemies[previewHit.hitEnemyIdx].id, true,
+                                    wStats.damage, previewHit.isHeadshot, previewHit.didWallbang,
+                                    false, isStealthFlank, previewHit.endPoint, player.pos
+                                });
                             }
                             net.QueueClientFire(wStats.id, wStats.isMelee, eyePos, forward);
                         }
@@ -1152,8 +1196,8 @@ int main() {
                 player.reviveProgress = myNet.reviveProgress;
                 mission.playerDownedTimer = 25.0f - myNet.bleedoutTimer;
 
-                if (!wasDown && player.isDowned) audio.PlayDownedAlert();
-                else if (wasDown && !player.isDowned) audio.PlayRevive();
+                if (!wasDown && player.isDowned) EventManager::Emit(CombatantDownedEvent{ net.localSlot, LanNetworkManager::GetSlotCallsign(net.localSlot), player.pos });
+                else if (wasDown && !player.isDowned) EventManager::Emit(CombatantRevivedEvent{ 0, net.localSlot, LanNetworkManager::GetSlotCallsign(net.localSlot), player.pos });
             }
 
             int allyIdx = 0;
@@ -1214,6 +1258,7 @@ int main() {
                     audio.PlayExplosion3D(expPos, isFlash);
                 }
             }
+            roster.SyncFromEntities(player, weapon, allies, net.localSlot);
         }
 
         // Atualiza Trilha Sonora Dinâmica
@@ -1240,15 +1285,14 @@ int main() {
         Vector3 eyePos = player.GetEyePosition();
         Vector3 forward = player.GetForward3D();
         float horizSpeed = sqrtf(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
-        bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
+        bool isStealthFlank = roster.IsStealthFlankActive(localSlot);
 
         BeginDrawing();
             ClearBackground({ 20, 23, 30, 255 });
 
             BeginMode3D(camera);
                 for (const auto& block : world) {
-                    DrawCubeV(block.pos, block.size, block.color);
-                    DrawCubeWiresV(block.pos, block.size, BLACK);
+                    DrawWorldBlock(block);
                 }
 
                 mission.Draw3D(assets);
@@ -1569,6 +1613,7 @@ int main() {
         EndDrawing();
     }
 
+    EventManager::ResetAllChannels();
     net.Shutdown();
     saveSystem.Save();
     assets.Shutdown();

@@ -5,20 +5,30 @@
 #include "Menu.hpp"
 #include "Audio.hpp"
 
+struct HitmarkerFeedback {
+    float timer = 0.0f;
+    float maxDuration = 0.20f;
+    Color color = WHITE;
+    const char* callout = "";
+};
+
 void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePlayer& player,
                         ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
                         std::vector<EnemyBot>& enemies, std::vector<Tracer>& tracers,
                         std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
-                        SquadOrder& currentOrder, TacticalPing& tacticalPing) {
+                        std::vector<DamageIndicator>& damageIndicators,
+                        SquadOrder& currentOrder, TacticalPing& tacticalPing, HitmarkerFeedback& hitmarker) {
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
     tracers.clear();
     grenades.clear();
     explosions.clear();
+    damageIndicators.clear();
     allies.clear();
     enemies.clear();
     currentOrder = SquadOrder::HOLD;
     tacticalPing.Clear();
+    hitmarker.timer = 0.0f;
 
     if (mode == GameMode::MOVEMENT_TEST) {
         world = LevelLoader::LoadFromFile("mapa_movimento.txt", MapPreset::MOVEMENT_COURSE);
@@ -55,7 +65,7 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Ping Tatico Contextual (SAVEPOINT_11)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Hitboxes, Wallbang & Hitmarkers (SAVEPOINT_12)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -74,9 +84,11 @@ int main() {
     std::vector<Tracer> tracers;
     std::vector<ThrownGrenade> grenades;
     std::vector<ExplosionEffect> explosions;
+    std::vector<DamageIndicator> damageIndicators;
 
     SquadOrder currentOrder = SquadOrder::HOLD;
     TacticalPing tacticalPing;
+    HitmarkerFeedback hitmarker;
     float orderBannerTimer = 0.0f;
 
     Camera3D camera = {};
@@ -108,7 +120,7 @@ int main() {
                 continue;
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder, tacticalPing);
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker);
                 audio.PlayOrder();
                 DisableCursor();
             }
@@ -131,14 +143,13 @@ int main() {
         }
 
         if (orderBannerTimer > 0.0f) orderBannerTimer -= dt;
+        if (hitmarker.timer > 0.0f) hitmarker.timer -= dt;
 
-        // Reiniciar cenário completo com F5
         if (IsKeyPressed(KEY_F5)) {
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder, tacticalPing);
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker);
             audio.PlayOrder();
         }
 
-        // Resetar onda de inimigos com T
         if (IsKeyPressed(KEY_T) && currentMode != GameMode::MOVEMENT_TEST) {
             ResetWave(enemies);
             tacticalPing.Clear();
@@ -294,7 +305,7 @@ int main() {
         bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
 
         // =====================================================================
-        // DISPARO / GOLPE / LANÇAMENTO DE GADGET
+        // DISPARO BALÍSTICO (HEADSHOT 2.5x + WALLBANG) / GOLPE / GADGET
         // =====================================================================
         const WeaponStats& wStats = weapon.GetCurrentStats();
         bool triggerPulled = wStats.isAutomatic
@@ -320,35 +331,63 @@ int main() {
                     Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
                     Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(right, 0.24f), { 0, -0.18f, 0 }));
 
+                    bool anyHit = false;
+                    bool anyHeadshot = false;
+                    bool anyWallbang = false;
+                    bool anyKill = false;
+
                     for (int p = 0; p < wStats.pelletCount; p++) {
                         Vector3 shotDir = ApplySpreadToDirection(forward, wStats.spread);
                         Ray ray = { eyePos, shotDir };
-                        float hitDist = GetClosestWallDistance(ray, world, wStats.range);
-                        int hitEnemyIdx = -1;
 
-                        for (size_t i = 0; i < enemies.size(); i++) {
-                            if (!enemies[i].IsAlive()) continue;
-                            RayCollision col = GetRayCollisionBox(ray, enemies[i].GetAABB());
-                            if (col.hit && col.distance < hitDist) {
-                                hitDist = col.distance;
-                                hitEnemyIdx = (int)i;
+                        BallisticHitResult hitRes = TraceBallisticShot(ray, wStats.range, wStats.penetrationPower, world, enemies);
+
+                        if (!wStats.isMelee) {
+                            Color shotColor = isStealthFlank ? SKYBLUE : (hitRes.didWallbang ? ORANGE : wStats.accentColor);
+                            tracers.push_back({ muzzlePos, hitRes.endPoint, shotColor, 0.085f });
+
+                            // Marcação visual no ponto onde a bala perfurou a parede
+                            if (hitRes.hasPiercePoint) {
+                                Vector3 sparkEnd = Vector3Add(hitRes.piercePoint, Vector3Scale(shotDir, 0.45f));
+                                tracers.push_back({ hitRes.piercePoint, sparkEnd, WHITE, 0.14f });
                             }
                         }
 
-                        if (!wStats.isMelee) {
-                            Vector3 endPoint = Vector3Add(eyePos, Vector3Scale(shotDir, hitDist));
-                            Color shotColor = isStealthFlank ? SKYBLUE : wStats.accentColor;
-                            tracers.push_back({ muzzlePos, endPoint, shotColor, 0.08f });
-                        }
+                        if (hitRes.hitEnemyIdx != -1) {
+                            EnemyBot& targetEnemy = enemies[hitRes.hitEnemyIdx];
+                            bool wasAlive = targetEnemy.IsAlive();
 
-                        if (hitEnemyIdx != -1) {
-                            float mult = isStealthFlank ? 2.0f : (player.isDowned ? 0.65f : 1.0f);
-                            enemies[hitEnemyIdx].hp -= wStats.damage * mult;
-                            enemies[hitEnemyIdx].suppression = std::min(100.0f, enemies[hitEnemyIdx].suppression + wStats.suppressionOnHit);
+                            float stateMult = isStealthFlank ? 2.0f : (player.isDowned ? 0.65f : 1.0f);
+                            float finalDamage = wStats.damage * hitRes.damageMultiplier * stateMult;
+
+                            targetEnemy.hp -= finalDamage;
+                            targetEnemy.suppression = std::min(100.0f, targetEnemy.suppression + wStats.suppressionOnHit);
 
                             if (!player.isDowned) {
                                 player.aggro = std::min(100.0f, player.aggro + wStats.aggroOnHit);
                             }
+
+                            anyHit = true;
+                            if (hitRes.isHeadshot) anyHeadshot = true;
+                            if (hitRes.didWallbang) anyWallbang = true;
+                            if (wasAlive && !targetEnemy.IsAlive()) anyKill = true;
+                        }
+                    }
+
+                    if (anyHit) {
+                        hitmarker.timer = hitmarker.maxDuration;
+                        if (anyKill) {
+                            hitmarker.color = RED;
+                            hitmarker.callout = anyHeadshot ? "HEADSHOT! ABATE" : (anyWallbang ? "WALLBANG! ABATE" : "ELIMINADO");
+                        } else if (anyHeadshot) {
+                            hitmarker.color = GOLD;
+                            hitmarker.callout = anyWallbang ? "WALLBANG HEADSHOT! (2.5x)" : "HEADSHOT! (2.5x)";
+                        } else if (anyWallbang) {
+                            hitmarker.color = ORANGE;
+                            hitmarker.callout = "WALLBANG!";
+                        } else {
+                            hitmarker.color = RAYWHITE;
+                            hitmarker.callout = "";
                         }
                     }
                 }
@@ -367,6 +406,8 @@ int main() {
             const ExplosionEffect& exp = explosions[e];
             audio.PlayExplosion(exp.isFlashbang);
 
+            bool nadeHit = false;
+            bool nadeKill = false;
             for (auto& enemy : enemies) {
                 if (!enemy.IsAlive()) continue;
                 float dist = Vector3Distance(enemy.GetEyePos(), exp.pos);
@@ -378,12 +419,20 @@ int main() {
                         enemy.isSuppressed = true;
                         enemy.coverSearchTimer = 0.0f;
                         player.aggro = std::max(0.0f, player.aggro - 20.0f);
+                        nadeHit = true;
                     } else {
                         enemy.hp -= 115.0f * falloff;
                         enemy.suppression = 100.0f;
                         enemy.isSuppressed = true;
+                        nadeHit = true;
+                        if (!enemy.IsAlive()) nadeKill = true;
                     }
                 }
+            }
+            if (nadeHit) {
+                hitmarker.timer = 0.25f;
+                hitmarker.color = nadeKill ? RED : ORANGE;
+                hitmarker.callout = nadeKill ? "EXPLOSAO! ABATE" : (exp.isFlashbang ? "INIMIGO CEGADO!" : "DANO EM AREA");
             }
         }
 
@@ -394,6 +443,12 @@ int main() {
         for (size_t i = 0; i < explosions.size(); ) {
             explosions[i].timer -= dt;
             if (explosions[i].timer <= 0.0f) explosions.erase(explosions.begin() + i);
+            else i++;
+        }
+
+        for (size_t i = 0; i < damageIndicators.size(); ) {
+            damageIndicators[i].timer -= dt;
+            if (damageIndicators[i].timer <= 0.0f) damageIndicators.erase(damageIndicators.begin() + i);
             else i++;
         }
 
@@ -410,7 +465,6 @@ int main() {
             player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
         }
 
-        // Atualização da IA e alertas sonoros
         bool prevPlayerDowned = player.isDowned;
         std::vector<bool> prevAllyDowned(allies.size(), false);
         for (size_t i = 0; i < allies.size(); i++) {
@@ -419,7 +473,7 @@ int main() {
 
         if (!allies.empty() || !enemies.empty()) {
             UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
-            UpdateEnemies(dt, enemies, player, allies, world, tracers);
+            UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
         }
 
         if (!prevPlayerDowned && player.isDowned) {
@@ -480,13 +534,19 @@ int main() {
                     bool isPingedTarget = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
 
                     if (enemy.isSuppressed) {
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.625f, enemy.pos.z }, 1.05f, 1.25f, 1.05f, { 165, 55, 45, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.625f, enemy.pos.z }, 1.05f, 1.25f, 1.05f, YELLOW);
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.0f, enemy.pos.z + 0.42f }, 0.6f, 0.18f, 0.2f, ORANGE);
+                        // Torso agachado + Cabeça diferenciada
+                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.44f, enemy.pos.z }, 1.04f, 0.88f, 1.04f, { 165, 55, 45, 255 });
+                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.44f, enemy.pos.z }, 1.04f, 0.88f, 1.04f, YELLOW);
+                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.08f, enemy.pos.z }, 0.72f, 0.40f, 0.72f, { 195, 75, 65, 255 });
+                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 1.08f, enemy.pos.z }, 0.72f, 0.40f, 0.72f, ORANGE);
                     } else {
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.95f, enemy.pos.z }, 1.0f, 1.9f, 1.0f, { 210, 45, 55, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.95f, enemy.pos.z }, 1.0f, 1.9f, 1.0f, isPingedTarget ? YELLOW : BLACK);
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.5f, enemy.pos.z + 0.42f }, 0.6f, 0.2f, 0.2f, MAROON);
+                        // Torso (0.0 -> 1.38m) + Cabeça (1.38m -> 1.92m)
+                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.69f, enemy.pos.z }, 1.0f, 1.38f, 1.0f, { 200, 42, 52, 255 });
+                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.69f, enemy.pos.z }, 1.0f, 1.38f, 1.0f, isPingedTarget ? YELLOW : BLACK);
+
+                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.65f, enemy.pos.z }, 0.72f, 0.54f, 0.72f, { 225, 65, 75, 255 });
+                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 1.65f, enemy.pos.z }, 0.72f, 0.54f, 0.72f, isPingedTarget ? YELLOW : MAROON);
+                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.62f, enemy.pos.z + 0.34f }, 0.52f, 0.16f, 0.12f, MAROON);
                     }
 
                     if (enemy.currentTargetId != -1) {
@@ -501,7 +561,6 @@ int main() {
                     }
                 }
 
-                // Desenha marcador 3D do Ping Tático
                 DrawTacticalPing3D(tacticalPing, allies, enemies);
 
                 for (const auto& g : grenades) {
@@ -527,6 +586,33 @@ int main() {
             // =================================================================
             // HUD 2D
             // =================================================================
+            int cx = largura / 2;
+            int cy = altura / 2;
+
+            // Indicador Direcional de Dano Recebido ao redor da mira
+            Vector2 playerLook2D = Vector2Normalize({ sinf(player.yaw), cosf(player.yaw) });
+            Vector2 playerRight2D = { -playerLook2D.y, playerLook2D.x };
+            for (const auto& dmg : damageIndicators) {
+                Vector2 toAttacker = { dmg.attackerPos.x - player.pos.x, dmg.attackerPos.z - player.pos.z };
+                if (Vector2Length(toAttacker) < 0.01f) continue;
+                toAttacker = Vector2Normalize(toAttacker);
+
+                float fwdDot = Vector2DotProduct(playerLook2D, toAttacker);
+                float rightDot = Vector2DotProduct(playerRight2D, toAttacker);
+                float relAngle = atan2f(rightDot, fwdDot); // 0 = frente, PI = costas
+
+                float ringRadius = 78.0f;
+                float dirX = sinf(relAngle);
+                float dirY = -cosf(relAngle);
+                Vector2 tip = { cx + dirX * (ringRadius + 16.0f), cy + dirY * (ringRadius + 16.0f) };
+                Vector2 perp = { -dirY, dirX };
+                Vector2 base1 = { cx + dirX * ringRadius + perp.x * 12.0f, cy + dirY * ringRadius + perp.y * 12.0f };
+                Vector2 base2 = { cx + dirX * ringRadius - perp.x * 12.0f, cy + dirY * ringRadius - perp.y * 12.0f };
+
+                float alpha = std::clamp(dmg.timer / 0.65f, 0.0f, 1.0f) * 0.85f;
+                DrawTriangle(tip, base2, base1, Fade(RED, alpha));
+            }
+
             if (currentMode == GameMode::MOVEMENT_TEST) {
                 float unitsPerSec = horizSpeed * 50.0f;
                 Color speedColor = (unitsPerSec > 495.0f) ? GREEN : (player.isSprinting ? SKYBLUE : RAYWHITE);
@@ -537,11 +623,10 @@ int main() {
                 DrawText(TextFormat("Posicao: X=%.1f  Y=%.2f  Z=%.1f", player.pos.x, player.pos.y, player.pos.z), 20, 46, 16, LIGHTGRAY);
                 DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
 
-                DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), largura / 2 - 120, altura - 115, 26, speedColor);
+                DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
                 DrawText("1-5: Armas/Gadgets | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | ESC: Menu",
                          20, altura - 26, 15, LIGHTGRAY);
             } else {
-                // Marcador 2D do Ping de Cobertura no mundo
                 if (tacticalPing.type == PingType::MOVE_COVER) {
                     Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
                     if (Vector3DotProduct(forward, Vector3Subtract(beaconTop, eyePos)) > 0.0f) {
@@ -625,26 +710,26 @@ int main() {
                 if (orderBannerTimer > 0.0f) {
                     const char* orderCallout = TextFormat("ORDEM AO ESQUADRAO: %s", GetOrderLabel(currentOrder));
                     Color bannerCol = (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : ((currentOrder == SquadOrder::ADVANCE) ? GREEN : SKYBLUE);
-                    DrawText(orderCallout, largura / 2 - MeasureText(orderCallout, 20) / 2, 85, 20, bannerCol);
+                    DrawText(orderCallout, cx - MeasureText(orderCallout, 20) / 2, 85, 20, bannerCol);
                 }
 
                 if (player.isDowned) {
                     DrawRectangleLinesEx({ 0, 0, (float)largura, (float)altura }, 12, Fade(RED, 0.65f));
                     const char* downMsg = "VOCE CAIU! AGUARDANDO RESGATE DE UM ALIADO...";
-                    DrawText(downMsg, largura / 2 - MeasureText(downMsg, 22) / 2, altura / 2 + 50, 22, RED);
+                    DrawText(downMsg, cx - MeasureText(downMsg, 22) / 2, cy + 50, 22, RED);
 
                     if (player.reviveProgress > 0.0f) {
-                        DrawRectangle(largura / 2 - 120, altura / 2 + 85, 240, 18, BLACK);
-                        DrawRectangle(largura / 2 - 118, altura / 2 + 87, (int)(236 * player.reviveProgress), 14, GREEN);
-                        DrawText("REANIMANDO...", largura / 2 - 55, altura / 2 + 110, 16, GREEN);
+                        DrawRectangle(cx - 120, cy + 85, 240, 18, BLACK);
+                        DrawRectangle(cx - 118, cy + 87, (int)(236 * player.reviveProgress), 14, GREEN);
+                        DrawText("REANIMANDO...", cx - 55, cy + 110, 16, GREEN);
                     }
                 } else if (player.draggingAllyId != -1) {
                     const char* dragMsg = TextFormat("ARRASTANDO %s PARA COBERTURA (PODE ATIRAR!)", allies[player.draggingAllyId - 1].name.c_str());
-                    DrawText(dragMsg, largura / 2 - MeasureText(dragMsg, 18) / 2, altura - 135, 18, YELLOW);
+                    DrawText(dragMsg, cx - MeasureText(dragMsg, 18) / 2, altura - 135, 18, YELLOW);
                 }
 
                 int barW = 320;
-                int barX = largura / 2 - barW / 2;
+                int barX = cx - barW / 2;
                 DrawRectangle(barX - 2, 18, barW + 4, 24, BLACK);
                 Color aggroBarColor = player.isDowned ? GRAY : (isStealthFlank ? SKYBLUE : ((player.aggro > 65.0f) ? RED : ORANGE));
                 DrawRectangle(barX, 20, (int)(barW * (player.aggro / 100.0f)), 20, aggroBarColor);
@@ -652,7 +737,7 @@ int main() {
                 const char* statusText = player.isDowned
                     ? "CAIDO (AMEACA ZERO)"
                     : (isStealthFlank ? "FURTIVO (2x DANO NOS FLANCOS)" : ((player.aggro > 65.0f) ? "AGGRO MAXIMO" : "AMEACA MODERADA"));
-                DrawText(statusText, largura / 2 - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
+                DrawText(statusText, cx - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
 
                 DrawText("ESQUADRAO:", 20, 20, 16, WHITE);
                 DrawText(TextFormat("Voce (Alpha): HP %.0f | Aggro %.0f%% %s", player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
@@ -668,7 +753,6 @@ int main() {
                     DrawText(allyLine, 20, 68 + (int)i * 22, 15, lineColor);
                 }
 
-                // Painel de Ordens Táticas e Ping
                 int cmdX = largura - 340;
                 DrawText("COMANDOS DO ESQUADRAO:", cmdX, 20, 16, WHITE);
                 DrawText("[F1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
@@ -683,7 +767,7 @@ int main() {
 
             // Barra de Arsenal e Munição (Slots 1 a 5)
             int hudW = 330;
-            int hudH = 82;
+            int hudH = 88;
             int hudX = largura - hudW - 20;
             int hudY = altura - hudH - 42;
 
@@ -699,19 +783,38 @@ int main() {
             DrawText(wStats.name, hudX + 12, hudY + 28, 19, WHITE);
 
             if (weapon.isReloading) {
-                DrawText("RECARREGANDO...", hudX + 12, hudY + 54, 15, YELLOW);
+                DrawText("RECARREGANDO...", hudX + 12, hudY + 56, 15, YELLOW);
             } else if (wStats.isMelee) {
-                DrawText("CORPO A CORPO (SILENCIOSO)", hudX + 12, hudY + 54, 14, LIME);
+                DrawText("CORPO A CORPO (SILENCIOSO)", hudX + 12, hudY + 56, 14, LIME);
             } else {
                 const char* ammoTxt = TextFormat("MUNICAO: %d / %d", weapon.GetCurrentAmmo(), wStats.magSize);
-                DrawText(ammoTxt, hudX + 12, hudY + 54, 15, (weapon.GetCurrentAmmo() == 0) ? RED : LIGHTGRAY);
+                DrawText(ammoTxt, hudX + 12, hudY + 56, 15, (weapon.GetCurrentAmmo() == 0) ? RED : LIGHTGRAY);
 
-                if (weapon.currentSlot == 1 || weapon.currentSlot == 2) {
-                    DrawText(TextFormat("[Aperte %d p/ trocar]", weapon.currentSlot), hudX + 185, hudY + 55, 12, SKYBLUE);
+                if (wStats.penetrationPower > 0.0f) {
+                    DrawText(TextFormat("PEN: %.2fm", wStats.penetrationPower), hudX + 225, hudY + 57, 13, ORANGE);
+                } else if (weapon.currentSlot == 1 || weapon.currentSlot == 2) {
+                    DrawText(TextFormat("[Aperte %d]", weapon.currentSlot), hudX + 235, hudY + 57, 12, SKYBLUE);
                 }
             }
 
-            DrawCircleLines(largura / 2, altura / 2, (wStats.id == WeaponId::SHOTGUN) ? 14.0f : 5.0f, isStealthFlank ? SKYBLUE : GREEN);
+            // Mira Central + Hitmarker Dinâmico
+            DrawCircleLines(cx, cy, (wStats.id == WeaponId::SHOTGUN) ? 14.0f : 5.0f, isStealthFlank ? SKYBLUE : GREEN);
+
+            if (hitmarker.timer > 0.0f) {
+                float ratio = hitmarker.timer / hitmarker.maxDuration;
+                float inner = 6.0f + (1.0f - ratio) * 4.0f;
+                float outer = 14.0f + (1.0f - ratio) * 6.0f;
+                Color hmCol = Fade(hitmarker.color, std::min(1.0f, ratio * 1.4f));
+
+                DrawLineEx({ cx - outer, cy - outer }, { cx - inner, cy - inner }, 2.2f, hmCol);
+                DrawLineEx({ cx + outer, cy - outer }, { cx + inner, cy - inner }, 2.2f, hmCol);
+                DrawLineEx({ cx - outer, cy + outer }, { cx - inner, cy + inner }, 2.2f, hmCol);
+                DrawLineEx({ cx + outer, cy + outer }, { cx + inner, cy + inner }, 2.2f, hmCol);
+
+                if (hitmarker.callout[0] != '\0') {
+                    DrawText(hitmarker.callout, cx - MeasureText(hitmarker.callout, 14) / 2, cy + 20, 14, hmCol);
+                }
+            }
         EndDrawing();
     }
 

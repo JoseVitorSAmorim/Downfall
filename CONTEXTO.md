@@ -93,7 +93,7 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Weapon.hpp`: Enum `WeaponId` com 8 equipamentos distribuídos em 5 slots (`1`: Rifle, Escopeta, LMG; `2`: Pistola, Revólver; `3`: Faca Tática; `4`: Granada Frag; `5`: Granada Flashbang), alternância de sub-armas apertando `1` ou `2` novamente, recarga na tecla `R` e struct `ThrownGrenade` com física de rebote AABB e detonação em área.
   - `Audio.hpp`: Efeitos sonoros procedurais específicos por categoria (`sfxShootShotgun`, `sfxShootHeavy`, `sfxMelee`, `sfxExplosion`, `sfxReload`).
   - `SquadAI.hpp` & `main.cpp`: Comandos de esquadrão movidos para `F1` (Avançar), `F2` (Manter Posição) e `F3` (Fogo de Supressão); reset de cenário movido para `F5`.
-### [SAVEPOINT_11 — ATUAL] Ping Tático Contextual (`SquadAI.hpp`, `main.cpp`)
+### [SAVEPOINT_11] Ping Tático Contextual (`SquadAI.hpp`, `main.cpp`)
 - **Status:** Implementado e modularizado (`SquadAI.hpp`, `main.cpp`).
 - **Adicionado:**
   - `SquadAI.hpp`: Struct `TacticalPing` (`PingType::MOVE_COVER` e `PingType::FOCUS_TARGET`) acionada via `MOUSE_BUTTON_MIDDLE` (`ProcessTacticalPing`).
@@ -101,19 +101,12 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - **Foco de Fogo:** Ao pingar um inimigo, o esquadrão prioriza disparar nele e ajusta o ângulo caso perca linha de visão.
   - **Bots Genéricos:** Aliados mantidos sem classes fixas para substituição direta por jogadores no futuro multiplayer LAN.
 
-[SAVEPOINT_12] Hitboxes (Headshot), Penetração e Feedback de Combate
-
-    Arquivos: Weapon.hpp, SquadAI.hpp, main.cpp
-
-    O que resolve: Atualmente inimigos e aliados têm apenas uma caixa AABB única e pouco retorno visual ao acertar ou sofrer tiros.
-
-    Mecânicas:
-
-        Hitbox Dupla: Separação entre torso (1.0x dano) e cabeça (2.5x dano crítico), inclusive ajustando a altura quando o alvo está agachado sob supressão.
-
-        Penetração de Balística (Wallbang): Armas pesadas (LMG e Revólver .44) atravessam blocos finos (espessura menor que 0.6m) com dano reduzido.
-
-        Feedback no HUD: Marcador de acerto (hitmarker) branco/vermelho na mira e arco direcional vermelho na tela indicando de qual direção veio o disparo.
+### [SAVEPOINT_12 — ATUAL] Hitboxes (Headshot), Wallbang & Hitmarkers (`SquadAI.hpp`, `Weapon.hpp`, `main.cpp`)
+- **Status:** Implementado e modularizado (`SquadAI.hpp`, `Weapon.hpp`, `main.cpp`).
+- **Adicionado:**
+  - `SquadAI.hpp`: Hitboxes separadas (`GetTorsoAABB()` e `GetHeadAABB()`) ajustadas dinamicamente quando suprimido/agachado; struct `DamageIndicator` registrando posição do atacante quando o jogador sofre dano.
+  - `Weapon.hpp`: Atributo `penetrationPower` (`LMG: 1.65m`, `Revólver: 1.35m`, `Rifle: 1.05m`), interseção exata entrada/saída (`IntersectRayBoxInterval`) e `TraceBallisticShot` aplicando `2.5x` em acertos na cabeça e atenuação proporcional ao atravessar coberturas finas.
+  - `main.cpp`: Hitmarker diagonal na mira por categoria (**Branco** = corpo, **Laranja** = *wallbang*, **Dourado** = *headshot*, **Vermelho** = abate) e arco direcional vermelho indicando de qual direção veio o disparo recebido.
 
 [SAVEPOINT_13] Objetos Interativos, Objetivos e Loop de Missão
 

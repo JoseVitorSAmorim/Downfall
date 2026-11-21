@@ -4,6 +4,7 @@
 #include "raymath.h"
 #include "rlgl.h"
 #include "World.hpp"
+#include "SquadAI.hpp"
 #include <vector>
 #include <string>
 #include <array>
@@ -35,6 +36,7 @@ struct WeaponStats {
     int pelletCount;
     float spread;
     float range;
+    float penetrationPower; // Espessura máxima (m) de parede perfurável
     float aggroOnFire;
     float aggroOnHit;
     float suppressionOnHit;
@@ -48,22 +50,150 @@ struct WeaponStats {
 inline const WeaponStats& GetWeaponStats(WeaponId id) {
     static const std::array<WeaponStats, (size_t)WeaponId::COUNT> table = {{
         // Slot 1: Primárias
-        { WeaponId::RIFLE,       1, "Rifle de Assalto",   "Primaria",   true,  false, false, 0.11f, 26.0f, 1, 0.012f, 85.0f, 10.0f, 14.0f, 18.0f, 0.09f,  6.5f, 30, 1.45f, GOLD },
-        { WeaponId::SHOTGUN,     1, "Escopeta Tatica",    "Primaria",   false, false, false, 0.72f, 17.0f, 7, 0.068f, 32.0f, 22.0f,  5.0f, 12.0f, 0.22f, 16.0f,  8, 1.80f, ORANGE },
-        { WeaponId::LMG,         1, "Metralhadora Leve",  "Primaria",   true,  false, false, 0.085f,21.0f, 1, 0.024f, 80.0f, 16.0f, 12.0f, 28.0f, 0.08f,  5.5f, 80, 2.35f, RED },
+        { WeaponId::RIFLE,       1, "Rifle de Assalto",   "Primaria",   true,  false, false, 0.11f, 26.0f, 1, 0.012f, 85.0f, 1.05f, 10.0f, 14.0f, 18.0f, 0.09f,  6.5f, 30, 1.45f, GOLD },
+        { WeaponId::SHOTGUN,     1, "Escopeta Tatica",    "Primaria",   false, false, false, 0.72f, 17.0f, 7, 0.068f, 32.0f, 0.00f, 22.0f,  5.0f, 12.0f, 0.22f, 16.0f,  8, 1.80f, ORANGE },
+        { WeaponId::LMG,         1, "Metralhadora Leve",  "Primaria",   true,  false, false, 0.085f,21.0f, 1, 0.024f, 80.0f, 1.65f, 16.0f, 12.0f, 28.0f, 0.08f,  5.5f, 80, 2.35f, RED },
 
         // Slot 2: Secundárias
-        { WeaponId::PISTOL,      2, "Pistola Tatica",     "Secundaria", false, false, false, 0.16f, 24.0f, 1, 0.008f, 65.0f,  4.0f,  8.0f, 12.0f, 0.07f,  5.0f, 15, 1.10f, SKYBLUE },
-        { WeaponId::REVOLVER,    2, "Revolver .44",       "Secundaria", false, false, false, 0.46f, 58.0f, 1, 0.005f, 75.0f, 15.0f, 20.0f, 32.0f, 0.19f, 14.5f,  6, 1.65f, YELLOW },
+        { WeaponId::PISTOL,      2, "Pistola Tatica",     "Secundaria", false, false, false, 0.16f, 24.0f, 1, 0.008f, 65.0f, 0.00f,  4.0f,  8.0f, 12.0f, 0.07f,  5.0f, 15, 1.10f, SKYBLUE },
+        { WeaponId::REVOLVER,    2, "Revolver .44",       "Secundaria", false, false, false, 0.46f, 58.0f, 1, 0.005f, 75.0f, 1.35f, 15.0f, 20.0f, 32.0f, 0.19f, 14.5f,  6, 1.65f, YELLOW },
 
         // Slot 3: Terciária (Arma Branca)
-        { WeaponId::MELEE_KNIFE, 3, "Faca Tatica",        "Terciaria",  false, true,  false, 0.45f, 65.0f, 1, 0.0f,    2.7f,  0.0f,  0.0f, 15.0f, 0.0f,   0.0f, -1, 0.0f,  LIME },
+        { WeaponId::MELEE_KNIFE, 3, "Faca Tatica",        "Terciaria",  false, true,  false, 0.45f, 65.0f, 1, 0.0f,    2.7f, 0.00f,  0.0f,  0.0f, 15.0f, 0.0f,   0.0f, -1, 0.0f,  LIME },
 
         // Slots 4 e 5: Gadgets / Granadas
-        { WeaponId::GADGET_FRAG, 4, "Granada Frag",       "Gadget 1",   false, false, true,  0.80f, 115.0f,1, 0.0f,   55.0f, 25.0f,  0.0f, 85.0f, 0.0f,   0.0f,  2, 6.00f, RED },
-        { WeaponId::GADGET_FLASH,5, "Granada Flashbang",  "Gadget 2",   false, false, true,  0.80f,   5.0f,1, 0.0f,   55.0f,  8.0f,  0.0f,100.0f, 0.0f,   0.0f,  2, 6.00f, WHITE }
+        { WeaponId::GADGET_FRAG, 4, "Granada Frag",       "Gadget 1",   false, false, true,  0.80f, 115.0f,1, 0.0f,   55.0f, 0.00f, 25.0f,  0.0f, 85.0f, 0.0f,   0.0f,  2, 6.00f, RED },
+        { WeaponId::GADGET_FLASH,5, "Granada Flashbang",  "Gadget 2",   false, false, true,  0.80f,   5.0f,1, 0.0f,   55.0f, 0.00f,  8.0f,  0.0f,100.0f, 0.0f,   0.0f,  2, 6.00f, WHITE }
     }};
     return table[(size_t)id];
+}
+
+struct BallisticHitResult {
+    Vector3 endPoint;
+    int hitEnemyIdx = -1;
+    bool isHeadshot = false;
+    bool didWallbang = false;
+    float damageMultiplier = 1.0f;
+    bool hasPiercePoint = false;
+    Vector3 piercePoint = { 0.0f, 0.0f, 0.0f };
+};
+
+// Interseção exata entrada/saída (slab method) para calcular espessura atravessada no bloco
+inline bool IntersectRayBoxInterval(Ray ray, const BoundingBox& box, float& outEntry, float& outExit) {
+    float tMin = 0.0f;
+    float tMax = 100000.0f;
+
+    const float orig[3] = { ray.position.x, ray.position.y, ray.position.z };
+    const float dir[3]  = { ray.direction.x, ray.direction.y, ray.direction.z };
+    const float bMin[3] = { box.min.x, box.min.y, box.min.z };
+    const float bMax[3] = { box.max.x, box.max.y, box.max.z };
+
+    for (int i = 0; i < 3; i++) {
+        if (fabsf(dir[i]) < 1e-6f) {
+            if (orig[i] < bMin[i] || orig[i] > bMax[i]) return false;
+        } else {
+            float invD = 1.0f / dir[i];
+            float t1 = (bMin[i] - orig[i]) * invD;
+            float t2 = (bMax[i] - orig[i]) * invD;
+            if (t1 > t2) std::swap(t1, t2);
+            tMin = std::max(tMin, t1);
+            tMax = std::min(tMax, t2);
+            if (tMin > tMax) return false;
+        }
+    }
+
+    outEntry = tMin;
+    outExit = tMax;
+    return true;
+}
+
+// Traça o projétil com suporte a Headshot (2.5x) e Wallbang em coberturas finas
+inline BallisticHitResult TraceBallisticShot(Ray ray, float maxRange, float penetrationPower,
+                                             const std::vector<WorldBlock>& world,
+                                             const std::vector<EnemyBot>& enemies) {
+    struct WallSpan {
+        float entry;
+        float exit;
+        float thickness;
+    };
+
+    std::vector<WallSpan> walls;
+    for (const auto& b : world) {
+        float tIn = 0.0f, tOut = 0.0f;
+        if (IntersectRayBoxInterval(ray, b.bounds, tIn, tOut)) {
+            if (tIn < maxRange && tOut > 0.001f) {
+                walls.push_back({ tIn, tOut, std::max(0.0f, tOut - tIn) });
+            }
+        }
+    }
+
+    std::sort(walls.begin(), walls.end(), [](const WallSpan& a, const WallSpan& b) {
+        return a.entry < b.entry;
+    });
+
+    // Descobre até onde o projétil consegue atravessar antes de parar em uma parede grossa
+    float stopDist = maxRange;
+    float remainingPen = penetrationPower;
+    float wallDamageMult = 1.0f;
+
+    struct PiercedSegment {
+        float exitDist;
+        float multAfter;
+    };
+    std::vector<PiercedSegment> piercedList;
+
+    for (const auto& w : walls) {
+        if (w.entry >= stopDist) break;
+
+        if (remainingPen >= w.thickness && w.thickness > 0.001f) {
+            remainingPen -= w.thickness;
+            float reduction = (w.thickness / (penetrationPower + 0.25f)) * 0.52f;
+            wallDamageMult *= std::max(0.38f, 1.0f - reduction);
+            piercedList.push_back({ w.exit, wallDamageMult });
+        } else {
+            stopDist = w.entry;
+            break;
+        }
+    }
+
+    // Verifica colisão com Cabeça e Torso dos inimigos antes do stopDist
+    BallisticHitResult res;
+    res.endPoint = Vector3Add(ray.position, Vector3Scale(ray.direction, stopDist));
+
+    float closestEnemyDist = stopDist;
+    for (size_t i = 0; i < enemies.size(); i++) {
+        if (!enemies[i].IsAlive()) continue;
+
+        RayCollision headCol = GetRayCollisionBox(ray, enemies[i].GetHeadAABB());
+        RayCollision torsoCol = GetRayCollisionBox(ray, enemies[i].GetTorsoAABB());
+
+        if (headCol.hit && headCol.distance < closestEnemyDist) {
+            closestEnemyDist = headCol.distance;
+            res.hitEnemyIdx = (int)i;
+            res.isHeadshot = true;
+            res.endPoint = headCol.point;
+        } else if (torsoCol.hit && torsoCol.distance < closestEnemyDist) {
+            closestEnemyDist = torsoCol.distance;
+            res.hitEnemyIdx = (int)i;
+            res.isHeadshot = false;
+            res.endPoint = torsoCol.point;
+        }
+    }
+
+    // Verifica se o projétil atravesou alguma parede antes de atingir o alvo
+    float appliedWallMult = 1.0f;
+    for (const auto& seg : piercedList) {
+        if (closestEnemyDist > seg.exitDist) {
+            res.didWallbang = true;
+            appliedWallMult = seg.multAfter;
+            res.hasPiercePoint = true;
+            res.piercePoint = Vector3Add(ray.position, Vector3Scale(ray.direction, seg.exitDist));
+        }
+    }
+
+    float hitboxMult = res.isHeadshot ? 2.5f : 1.0f;
+    res.damageMultiplier = hitboxMult * appliedWallMult;
+    return res;
 }
 
 struct ThrownGrenade {
@@ -84,9 +214,9 @@ struct ExplosionEffect {
 
 class ViewmodelWeapon {
 public:
-    int currentSlot = 1; // 1..5
-    int primaryVariant = 0;   // 0: RIFLE, 1: SHOTGUN, 2: LMG
-    int secondaryVariant = 0; // 0: PISTOL, 1: REVOLVER
+    int currentSlot = 1;
+    int primaryVariant = 0;
+    int secondaryVariant = 0;
 
     std::array<int, (size_t)WeaponId::COUNT> ammo = { 30, 8, 80, 15, 6, -1, 2, 2 };
     std::array<float, (size_t)WeaponId::COUNT> gadgetRecharge = { 0 };
@@ -95,7 +225,6 @@ public:
     float reloadTimer = 0.0f;
     bool isReloading = false;
 
-    // Animações de viewmodel
     Vector2 swayOffset = { 0.0f, 0.0f };
     float bobTimer = 0.0f;
     float recoilZ = 0.0f;
@@ -130,7 +259,6 @@ public:
         if (slot < 1 || slot > 5) return;
 
         if (slot == currentSlot) {
-            // Apertar 1 ou 2 novamente alterna entre os modelos daquela categoria
             if (slot == 1) {
                 primaryVariant = (primaryVariant + 1) % 3;
                 isReloading = false;
@@ -220,7 +348,6 @@ public:
         if (meleeSlashTimer > 0.0f) meleeSlashTimer -= dt;
         if (throwAnimTimer > 0.0f) throwAnimTimer -= dt;
 
-        // Recarga automática de gadgets (granadas regeneram 1 a cada 7 segundos)
         for (WeaponId gid : { WeaponId::GADGET_FRAG, WeaponId::GADGET_FLASH }) {
             size_t idx = (size_t)gid;
             const WeaponStats& gst = GetWeaponStats(gid);
@@ -235,7 +362,6 @@ public:
             }
         }
 
-        // Progresso de recarga de armas de fogo
         if (isReloading) {
             reloadTimer -= dt;
             if (reloadTimer <= 0.0f) {
@@ -265,7 +391,6 @@ public:
         WeaponId wid = GetCurrentWeaponId();
         const WeaponStats& st = GetCurrentStats();
 
-        // Se acabou as granadas do slot atual, não desenha granada na mão
         if (st.isGrenade && GetCurrentAmmo() <= 0) return;
 
         Matrix invView = MatrixInvert(GetCameraMatrix(camera));
@@ -279,7 +404,6 @@ public:
         Color statusLed = isStealthFlank ? SKYBLUE : st.accentColor;
 
         if (wid == WeaponId::MELEE_KNIFE) {
-            // Animação de corte diagonal da Faca Tática
             float slashProgress = (meleeSlashTimer > 0.0f) ? sinf((meleeSlashTimer / 0.26f) * PI) : 0.0f;
             rlTranslatef(0.25f + swayOffset.x + bobX - slashProgress * 0.28f,
                          -0.22f + swayOffset.y + bobY + slashProgress * 0.08f,
@@ -287,14 +411,11 @@ public:
             rlRotatef(18.0f + slashProgress * 55.0f, 0.0f, 0.0f, 1.0f);
             rlRotatef(-slashProgress * 65.0f, 1.0f, 0.0f, 0.0f);
 
-            // Cabo e guarda
             DrawCube({ 0.0f, 0.0f, 0.06f }, 0.045f, 0.055f, 0.16f, { 35, 38, 44, 255 });
             DrawCube({ 0.0f, 0.0f, -0.03f }, 0.08f, 0.08f, 0.02f, DARKGRAY);
-            // Lâmina metálica com fio brilhante
             DrawCube({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, LIGHTGRAY);
             DrawCubeWires({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, statusLed);
         } else if (st.isGrenade) {
-            // Granada na mão direita
             float pullBack = (throwAnimTimer > 0.0f) ? sinf((throwAnimTimer / 0.30f) * PI) * 0.22f : 0.0f;
             rlTranslatef(0.24f + swayOffset.x + bobX, -0.22f + swayOffset.y + bobY, -0.44f + pullBack);
             rlRotatef(15.0f, 0.0f, 0.0f, 1.0f);
@@ -307,7 +428,6 @@ public:
             DrawCube({ 0.0f, 0.02f, 0.0f }, 0.096f, 0.025f, 0.096f, bandCol);
             DrawCube({ 0.0f, 0.08f, 0.0f }, 0.04f, 0.03f, 0.04f, DARKGRAY);
         } else {
-            // Armas de Fogo (Rifle, Escopeta, LMG, Pistola, Revólver)
             rlTranslatef(0.27f + swayOffset.x + bobX, -0.23f + swayOffset.y + bobY + reloadDrop, -0.52f + recoilZ);
             rlRotatef(recoilPitch + (isReloading ? -25.0f : 0.0f), 1.0f, 0.0f, 0.0f);
             rlRotatef(swayOffset.x * 120.0f, 0.0f, 1.0f, 0.0f);
@@ -322,11 +442,9 @@ public:
                 DrawCube({ 0.0f, 0.0f, 0.02f }, 0.11f, 0.125f, 0.46f, { 50, 48, 46, 255 });
                 DrawCubeWires({ 0.0f, 0.0f, 0.02f }, 0.11f, 0.125f, 0.46f, BLACK);
                 DrawCube({ 0.0f, 0.025f, -0.34f }, 0.055f, 0.055f, 0.28f, { 30, 32, 36, 255 });
-                // Telha (pump) inferior
                 DrawCube({ 0.0f, -0.04f, -0.26f }, 0.075f, 0.06f, 0.18f, { 110, 75, 45, 255 });
                 DrawCube({ 0.0f, 0.075f, 0.05f }, 0.06f, 0.022f, 0.10f, statusLed);
             } else if (wid == WeaponId::LMG) {
-                // Corpo robusto + caixa de munição lateral/inferior
                 DrawCube({ 0.0f, 0.01f, -0.02f }, 0.13f, 0.145f, 0.50f, { 48, 56, 48, 255 });
                 DrawCubeWires({ 0.0f, 0.01f, -0.02f }, 0.13f, 0.145f, 0.50f, BLACK);
                 DrawCube({ 0.0f, 0.02f, -0.38f }, 0.065f, 0.065f, 0.28f, { 30, 33, 35, 255 });
@@ -338,7 +456,6 @@ public:
                 DrawCube({ 0.0f, -0.05f, 0.04f }, 0.055f, 0.11f, 0.07f, { 30, 32, 36, 255 });
                 DrawCube({ 0.0f, 0.068f, 0.03f }, 0.04f, 0.016f, 0.08f, statusLed);
             } else if (wid == WeaponId::REVOLVER) {
-                // Cano longo cromado + tambor giratório
                 DrawCube({ 0.0f, 0.03f, -0.18f }, 0.055f, 0.065f, 0.30f, LIGHTGRAY);
                 DrawCubeWires({ 0.0f, 0.03f, -0.18f }, 0.055f, 0.065f, 0.30f, BLACK);
                 DrawCube({ 0.0f, 0.015f, -0.01f }, 0.095f, 0.095f, 0.10f, GRAY);
@@ -357,7 +474,6 @@ public:
     }
 };
 
-// Física AABB 3D das granadas lançadas (gravidade e rebote nas paredes/chão)
 inline void UpdateGrenades(float dt, std::vector<ThrownGrenade>& grenades,
                            std::vector<ExplosionEffect>& explosions,
                            const std::vector<WorldBlock>& world) {
@@ -368,7 +484,6 @@ inline void UpdateGrenades(float dt, std::vector<ThrownGrenade>& grenades,
         g.vel.y -= 18.0f * dt;
         float r = 0.16f;
 
-        // Eixo X
         g.pos.x += g.vel.x * dt;
         BoundingBox box = { { g.pos.x - r, g.pos.y - r, g.pos.z - r }, { g.pos.x + r, g.pos.y + r, g.pos.z + r } };
         for (const auto& b : world) {
@@ -379,7 +494,6 @@ inline void UpdateGrenades(float dt, std::vector<ThrownGrenade>& grenades,
             }
         }
 
-        // Eixo Z
         g.pos.z += g.vel.z * dt;
         box = { { g.pos.x - r, g.pos.y - r, g.pos.z - r }, { g.pos.x + r, g.pos.y + r, g.pos.z + r } };
         for (const auto& b : world) {
@@ -390,7 +504,6 @@ inline void UpdateGrenades(float dt, std::vector<ThrownGrenade>& grenades,
             }
         }
 
-        // Eixo Y
         g.pos.y += g.vel.y * dt;
         box = { { g.pos.x - r, g.pos.y - r, g.pos.z - r }, { g.pos.x + r, g.pos.y + r, g.pos.z + r } };
         for (const auto& b : world) {

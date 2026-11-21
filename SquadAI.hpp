@@ -33,8 +33,8 @@ enum class PingType {
 struct TacticalPing {
     PingType type = PingType::NONE;
     Vector3 worldPos = { 0.0f, 0.0f, 0.0f };
-    int assignedAllyId = -1; // Aliado mais próximo enviado para a cobertura
-    int targetEnemyIdx = -1; // Inimigo marcado para foco de fogo do esquadrão
+    int assignedAllyId = -1;
+    int targetEnemyIdx = -1;
     float timer = 0.0f;
     float pulseAnim = 0.0f;
 
@@ -44,6 +44,11 @@ struct TacticalPing {
         targetEnemyIdx = -1;
         timer = 0.0f;
     }
+};
+
+struct DamageIndicator {
+    Vector3 attackerPos;
+    float timer;
 };
 
 struct SquadAlly {
@@ -58,7 +63,6 @@ struct SquadAlly {
     float coverSearchTimer;
     Color color;
 
-    // Estados dinâmicos (com valores padrão para compatibilidade de inicialização)
     float maxHp = 100.0f;
     float lastHp = 100.0f;
     float suppression = 0.0f;
@@ -74,11 +78,34 @@ struct SquadAlly {
         return { pos.x, pos.y + h, pos.z };
     }
 
-    BoundingBox GetAABB() const {
-        float h = isDowned ? 0.55f : (isSuppressed ? 1.25f : 1.8f);
+    BoundingBox GetTorsoAABB() const {
+        if (isDowned) {
+            return { { pos.x - 0.42f, pos.y, pos.z - 0.75f }, { pos.x + 0.42f, pos.y + 0.55f, pos.z + 0.75f } };
+        }
+        float torsoTop = isSuppressed ? 0.88f : 1.32f;
         return {
-            { pos.x - 0.4f, pos.y, pos.z - 0.4f },
-            { pos.x + 0.4f, pos.y + h, pos.z + 0.4f }
+            { pos.x - 0.40f, pos.y, pos.z - 0.40f },
+            { pos.x + 0.40f, pos.y + torsoTop, pos.z + 0.40f }
+        };
+    }
+
+    BoundingBox GetHeadAABB() const {
+        if (isDowned) {
+            return { { pos.x - 0.25f, pos.y + 0.25f, pos.z - 0.75f }, { pos.x + 0.25f, pos.y + 0.55f, pos.z - 0.35f } };
+        }
+        float headMinY = isSuppressed ? 0.88f : 1.32f;
+        float headMaxY = isSuppressed ? 1.26f : 1.82f;
+        return {
+            { pos.x - 0.30f, pos.y + headMinY, pos.z - 0.30f },
+            { pos.x + 0.30f, pos.y + headMaxY, pos.z + 0.30f }
+        };
+    }
+
+    BoundingBox GetAABB() const {
+        float h = isDowned ? 0.55f : (isSuppressed ? 1.26f : 1.82f);
+        return {
+            { pos.x - 0.40f, pos.y, pos.z - 0.40f },
+            { pos.x + 0.40f, pos.y + h, pos.z + 0.40f }
         };
     }
 };
@@ -93,7 +120,7 @@ struct EnemyBot {
     float coverSearchTimer = 0.0f;
     float suppression = 0.0f;
     bool isSuppressed = false;
-    int currentTargetId = -1; // -1: nenhum, 0: jogador, 1..N: aliado id
+    int currentTargetId = -1;
 
     bool IsAlive() const { return hp > 0.0f; }
 
@@ -102,11 +129,32 @@ struct EnemyBot {
         return { pos.x, pos.y + h, pos.z };
     }
 
-    BoundingBox GetAABB() const {
-        float h = isSuppressed ? 1.25f : 1.9f;
+    // Hitbox do Torso (dano 1.0x)
+    BoundingBox GetTorsoAABB() const {
+        float torsoTop = isSuppressed ? 0.88f : 1.38f;
+        float halfW = isSuppressed ? 0.52f : 0.50f;
         return {
-            { pos.x - 0.5f, pos.y, pos.z - 0.5f },
-            { pos.x + 0.5f, pos.y + h, pos.z + 0.5f }
+            { pos.x - halfW, pos.y, pos.z - halfW },
+            { pos.x + halfW, pos.y + torsoTop, pos.z + halfW }
+        };
+    }
+
+    // Hitbox da Cabeça (dano 2.5x crítico)
+    BoundingBox GetHeadAABB() const {
+        float headMinY = isSuppressed ? 0.88f : 1.38f;
+        float headMaxY = isSuppressed ? 1.28f : 1.92f;
+        float halfW = 0.36f;
+        return {
+            { pos.x - halfW, pos.y + headMinY, pos.z - halfW },
+            { pos.x + halfW, pos.y + headMaxY, pos.z + halfW }
+        };
+    }
+
+    BoundingBox GetAABB() const {
+        float h = isSuppressed ? 1.28f : 1.92f;
+        return {
+            { pos.x - 0.50f, pos.y, pos.z - 0.50f },
+            { pos.x + 0.50f, pos.y + h, pos.z + 0.50f }
         };
     }
 };
@@ -130,7 +178,6 @@ inline void MoveAllyWithCollision(SquadAlly& ally, Vector3 target, float speed, 
     float step = std::min(dist, speed * dt);
     float r = 0.42f;
 
-    // Eixo X
     ally.pos.x += dir.x * step;
     BoundingBox box = { { ally.pos.x - r, ally.pos.y + 0.1f, ally.pos.z - r }, { ally.pos.x + r, ally.pos.y + 1.7f, ally.pos.z + r } };
     for (const auto& b : world) {
@@ -141,7 +188,6 @@ inline void MoveAllyWithCollision(SquadAlly& ally, Vector3 target, float speed, 
         }
     }
 
-    // Eixo Z
     ally.pos.z += dir.z * step;
     box = { { ally.pos.x - r, ally.pos.y + 0.1f, ally.pos.z - r }, { ally.pos.x + r, ally.pos.y + 1.7f, ally.pos.z + r } };
     for (const auto& b : world) {
@@ -217,9 +263,6 @@ inline Vector3 FindProtectedCoverPos(Vector3 origin, Vector3 threatPos, const st
     return bestSpot;
 }
 
-// =============================================================================
-// PING TÁTICO CONTEXTUAL (MOUSE_BUTTON_MIDDLE)
-// =============================================================================
 inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
                                 const std::vector<WorldBlock>& world,
                                 std::vector<SquadAlly>& allies,
@@ -231,7 +274,6 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
     int hitBlockIdx = -1;
     Vector3 hitPoint = { 0.0f, 0.0f, 0.0f };
 
-    // 1. Verifica se o jogador mirou em algum inimigo
     for (size_t i = 0; i < enemies.size(); i++) {
         if (!enemies[i].IsAlive()) continue;
         RayCollision col = GetRayCollisionBox(ray, enemies[i].GetAABB());
@@ -242,7 +284,6 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
         }
     }
 
-    // 2. Verifica se mirou em algum bloco do cenário (cobertura ou chão)
     if (hitEnemyIdx == -1) {
         for (size_t b = 0; b < world.size(); b++) {
             RayCollision col = GetRayCollisionBox(ray, world[b].bounds);
@@ -256,12 +297,10 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
 
     if (hitEnemyIdx == -1 && hitBlockIdx == -1) return false;
 
-    // Reseta ordens de ping individuais anteriores
     for (auto& ally : allies) {
         ally.hasPingOrder = false;
     }
 
-    // Caso A: Ping em Inimigo -> Esquadrão foca fogo nesse alvo
     if (hitEnemyIdx != -1) {
         ping.type = PingType::FOCUS_TARGET;
         ping.targetEnemyIdx = hitEnemyIdx;
@@ -272,13 +311,11 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
         return true;
     }
 
-    // Caso B: Ping em Bloco/Cobertura -> Aliado mais próximo corre para trás daquela cobertura
     if (allies.empty()) return false;
 
     const WorldBlock& block = world[hitBlockIdx];
     Vector3 coverSpot = { std::clamp(hitPoint.x, -22.0f, 22.0f), 0.0f, std::clamp(hitPoint.z, -22.0f, 22.0f) };
 
-    // Se o bloco for uma barreira vertical (não o chão nem muro externo gigante), posiciona atrás dela
     if (block.size.y >= 1.1f && block.size.x <= 18.0f && block.size.z <= 18.0f) {
         Vector3 threatCenter = { 0.0f, 1.5f, -15.0f };
         int aliveEnemies = 0;
@@ -292,7 +329,6 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
         if (aliveEnemies > 0) {
             threatCenter = Vector3Scale(sumEnemies, 1.0f / (float)aliveEnemies);
         } else {
-            // Sem inimigos ativos (ex.: pista de movimento), posiciona no lado oposto ao olhar do jogador
             threatCenter = Vector3Add(block.pos, Vector3Scale(forward, 5.0f));
         }
 
@@ -302,7 +338,6 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
         awayDir.y = 0.0f;
         awayDir = Vector3Normalize(awayDir);
 
-        // Escolhe a face da caixa mais protegida contra a ameaça
         float offsetX = (fabsf(awayDir.x) >= fabsf(awayDir.z))
             ? ((awayDir.x >= 0.0f ? 1.0f : -1.0f) * (block.size.x * 0.5f + 0.90f))
             : std::clamp(hitPoint.x - block.pos.x, -block.size.x * 0.35f, block.size.x * 0.35f);
@@ -318,7 +353,6 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
         };
     }
 
-    // Seleciona o aliado vivo mais próximo do ponto marcado
     int bestAllyIdx = -1;
     float minDist = 99999.0f;
     for (size_t i = 0; i < allies.size(); i++) {
@@ -357,7 +391,6 @@ inline void DrawTacticalPing3D(const TacticalPing& ping, const std::vector<Squad
         DrawLine3D({ p.x, 0.05f, p.z }, { p.x, 1.85f, p.z }, Fade(SKYBLUE, 0.85f));
         DrawSphere({ p.x, 1.90f, p.z }, 0.12f, SKYBLUE);
 
-        // Linha guia pontilhada/sutil entre o aliado designado e a cobertura
         for (const auto& ally : allies) {
             if (ally.id == ping.assignedAllyId && !ally.isDowned) {
                 DrawLine3D({ ally.pos.x, 0.15f, ally.pos.z }, { p.x, 0.15f, p.z }, Fade(SKYBLUE, 0.45f));
@@ -373,14 +406,10 @@ inline void DrawTacticalPing3D(const TacticalPing& ping, const std::vector<Squad
     }
 }
 
-// =============================================================================
-// ATUALIZAÇÃO DOS ALIADOS (SEM ESPECIALIZAÇÃO FIXA - LIVRES PARA MULTIPLAYER)
-// =============================================================================
 inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<EnemyBot>& enemies,
                          SourcePlayer& player, SquadOrder currentOrder,
                          const std::vector<WorldBlock>& world, std::vector<Tracer>& tracers,
                          TacticalPing& ping) {
-    // Atualiza ciclo de vida do Ping Tático
     if (ping.type != PingType::NONE) {
         ping.timer -= dt;
         ping.pulseAnim += dt;
@@ -406,7 +435,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
         }
     }
 
-    // Verifica se algum aliado livre deve resgatar o jogador caído
     int playerRescuerIdx = -1;
     if (player.isDowned) {
         float bestDist = 99999.0f;
@@ -423,14 +451,12 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
     for (size_t i = 0; i < allies.size(); i++) {
         SquadAlly& ally = allies[i];
 
-        // Estado CAÍDO (Sangramento)
         if (ally.isDowned) {
             ally.aggro = 0.0f;
             ally.isSuppressed = false;
             ally.hasPingOrder = false;
             ally.bleedoutTimer -= dt;
             if (ally.bleedoutTimer <= 0.0f) {
-                // Respawn tático recuado após sangramento no protótipo
                 ally.isDowned = false;
                 ally.hp = 80.0f;
                 ally.lastHp = 80.0f;
@@ -441,7 +467,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             continue;
         }
 
-        // Detecta dano recebido para alimentar supressão e aggro
         if (ally.hp < ally.lastHp) {
             float dmgTaken = ally.lastHp - ally.hp;
             ally.suppression = std::min(100.0f, ally.suppression + dmgTaken * 1.6f);
@@ -457,12 +482,10 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             continue;
         }
 
-        // Decaimento da supressão
         ally.suppression = std::max(0.0f, ally.suppression - 16.0f * dt);
         ally.isSuppressed = (ally.suppression >= 65.0f);
         ally.aggro = std::max(0.0f, ally.aggro - 7.5f * dt);
 
-        // Resgate automático do jogador caído
         if (player.isDowned && (int)i == playerRescuerIdx) {
             float dPlayer = Vector3Distance(ally.pos, player.pos);
             if (dPlayer > 1.7f) {
@@ -478,7 +501,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             continue;
         }
 
-        // Escolha do alvo inimigo (prioriza inimigo marcado com Ping Tático!)
         int targetIdx = -1;
         if (ping.type == PingType::FOCUS_TARGET &&
             ping.targetEnemyIdx >= 0 && ping.targetEnemyIdx < (int)enemies.size() &&
@@ -498,9 +520,7 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             }
         }
 
-        // Movimentação Tática
         if (ally.isSuppressed) {
-            // Sob supressão pesada, busca cobertura próxima
             ally.coverSearchTimer -= dt;
             if (ally.coverSearchTimer <= 0.0f) {
                 Vector3 threat = (targetIdx != -1) ? enemies[targetIdx].pos : Vector3{ 0.0f, 0.0f, -15.0f };
@@ -509,7 +529,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             }
             MoveAllyWithCollision(ally, ally.coverPos, 4.8f, dt, world);
         } else if (ally.hasPingOrder) {
-            // Ping de Cobertura: corre diretamente até o bloco marcado pelo jogador
             MoveAllyWithCollision(ally, ally.anchorPos, 6.2f, dt, world);
         } else if (currentOrder == SquadOrder::ADVANCE && targetIdx != -1) {
             Vector3 toEnemy = Vector3Subtract(enemies[targetIdx].pos, ally.pos);
@@ -519,7 +538,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
                 MoveAllyWithCollision(ally, enemies[targetIdx].pos, 4.6f, dt, world);
             }
         } else if (currentOrder == SquadOrder::HOLD || currentOrder == SquadOrder::SUPPRESS) {
-            // Se há um inimigo marcado por Ping e o aliado não tem visão limpa, ajusta levemente o ângulo
             if (ping.type == PingType::FOCUS_TARGET && targetIdx != -1 &&
                 !HasLineOfSight(ally.GetEyePos(), enemies[targetIdx].GetEyePos(), world)) {
                 MoveAllyWithCollision(ally, enemies[targetIdx].pos, 3.8f, dt, world);
@@ -528,7 +546,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             }
         }
 
-        // Disparo contra inimigos
         ally.fireTimer -= dt;
         if (!ally.isSuppressed && targetIdx != -1 && ally.fireTimer <= 0.0f) {
             Vector3 from = ally.GetEyePos();
@@ -539,7 +556,6 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
                 ally.fireTimer = suppressMode ? (0.28f + (float)GetRandomValue(0, 12) / 100.0f)
                                               : (0.55f + (float)GetRandomValue(0, 25) / 100.0f);
 
-                // Pequena dispersão realista
                 Vector3 aimOffset = {
                     (float)GetRandomValue(-18, 18) / 100.0f,
                     (float)GetRandomValue(-15, 15) / 100.0f,
@@ -561,19 +577,15 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
     }
 }
 
-// =============================================================================
-// ATUALIZAÇÃO DOS INIMIGOS (AGGRO BILATERAL + SUPRESSÃO + COBERTURA)
-// =============================================================================
 inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies, SourcePlayer& player,
                           std::vector<SquadAlly>& allies, const std::vector<WorldBlock>& world,
-                          std::vector<Tracer>& tracers) {
+                          std::vector<Tracer>& tracers, std::vector<DamageIndicator>& damageIndicators) {
     for (auto& enemy : enemies) {
         if (!enemy.IsAlive()) continue;
 
         enemy.suppression = std::max(0.0f, enemy.suppression - 14.0f * dt);
         enemy.isSuppressed = (enemy.suppression >= 65.0f);
 
-        // Seleção de alvo baseada em Aggro + Linha de Visão
         int chosenId = -1;
         float highestThreat = -1.0f;
 
@@ -610,7 +622,6 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies, SourcePlayer
             targetEye = allies[chosenId - 1].GetEyePos();
         }
 
-        // Movimentação: foge para cobertura quando suprimido ou avança cautelosamente
         if (enemy.isSuppressed) {
             enemy.coverSearchTimer -= dt;
             if (enemy.coverSearchTimer <= 0.0f) {
@@ -625,7 +636,6 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies, SourcePlayer
             }
         }
 
-        // Disparo do inimigo
         enemy.fireTimer -= dt;
         if (!enemy.isSuppressed && chosenId != -1 && enemy.fireTimer <= 0.0f) {
             Vector3 from = enemy.GetEyePos();
@@ -642,6 +652,7 @@ inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies, SourcePlayer
                 if ((float)GetRandomValue(1, 100) / 100.0f <= 0.58f) {
                     if (chosenId == 0 && !player.isDowned) {
                         player.hp -= 12.0f;
+                        damageIndicators.push_back({ enemy.pos, 0.65f });
                         if (player.hp <= 0.0f) {
                             player.hp = 0.0f;
                             player.isDowned = true;

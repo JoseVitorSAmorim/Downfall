@@ -7,6 +7,7 @@
 #include "Objectives.hpp"
 #include "MapEditor.hpp"
 #include "AssetManager.hpp"
+#include "Cutscene.hpp"
 
 struct HitmarkerFeedback {
     float timer = 0.0f;
@@ -21,7 +22,8 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
                         std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
                         std::vector<DamageIndicator>& damageIndicators,
                         SquadOrder& currentOrder, TacticalPing& tacticalPing,
-                        HitmarkerFeedback& hitmarker, MissionManager& mission) {
+                        HitmarkerFeedback& hitmarker, MissionManager& mission,
+                        CutsceneManager& cutscenes, Camera3D& camera, ProceduralAudio& audio) {
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
     tracers.clear();
@@ -59,6 +61,18 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         ResetWave(enemies);
         mission.SetupForMode(true, false);
     }
+
+    Vector3 eye = player.GetEyePosition();
+    Vector3 target = Vector3Add(eye, player.GetForward3D());
+    camera.position = eye;
+    camera.target = target;
+    camera.fovy = 75.0f;
+
+    bool isCampaign = (mode != GameMode::MOVEMENT_TEST && mode != GameMode::SUPPRESSION_RANGE);
+    cutscenes.SetupForMode(isCampaign, eye, target);
+    if (isCampaign) {
+        cutscenes.Play(0, eye, target, 75.0f, audio);
+    }
 }
 
 Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
@@ -72,7 +86,7 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Audio Espacial 3D & Trilha Dinamica (SAVEPOINT_16)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Cutscenes & Trigger Zones (SAVEPOINT_17)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -84,6 +98,7 @@ int main() {
 
     MainMenu menu;
     InGameMapEditor mapEditor;
+    CutsceneManager cutscenes;
     GameMode currentMode = GameMode::MAIN_MENU;
     bool shouldQuit = false;
 
@@ -154,8 +169,7 @@ int main() {
                 DisableCursor();
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission);
-                audio.PlayOrder();
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio);
                 DisableCursor();
             }
 
@@ -200,6 +214,7 @@ int main() {
         // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D
         // =====================================================================
         if (IsKeyPressed(KEY_ESCAPE)) {
+            cutscenes.Skip();
             currentMode = GameMode::MAIN_MENU;
             EnableCursor();
             continue;
@@ -209,11 +224,21 @@ int main() {
         if (hitmarker.timer > 0.0f) hitmarker.timer -= dt;
 
         if (IsKeyPressed(KEY_F5)) {
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission);
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio);
+        }
+
+        // Teclas de debug/teste das cutscenes e trigger zones
+        if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying()) {
+            Vector3 eye = player.GetEyePosition();
+            Vector3 tgt = Vector3Add(eye, player.GetForward3D());
+            cutscenes.Play(0, eye, tgt, camera.fovy, audio);
+        }
+        if (IsKeyPressed(KEY_F8)) {
+            cutscenes.showDebugTriggers = !cutscenes.showDebugTriggers;
             audio.PlayOrder();
         }
 
-        if (IsKeyPressed(KEY_T) && mission.state == MissionState::SANDBOX && currentMode != GameMode::MOVEMENT_TEST) {
+        if (IsKeyPressed(KEY_T) && mission.state == MissionState::SANDBOX && currentMode != GameMode::MOVEMENT_TEST && !cutscenes.IsPlaying()) {
             ResetWave(enemies);
             tacticalPing.Clear();
             audio.PlayOrder();
@@ -221,7 +246,13 @@ int main() {
 
         bool missionEnded = (mission.state == MissionState::VICTORY || mission.state == MissionState::DEFEAT);
 
-        if (!missionEnded) {
+        Vector3 preEye = player.GetEyePosition();
+        Vector3 preTarget = Vector3Add(preEye, player.GetForward3D());
+        cutscenes.Update(dt, player.pos, preEye, preTarget, camera.fovy, mission.extraction.isActive, audio);
+
+        bool inCutscene = cutscenes.IsPlaying();
+
+        if (!missionEnded && !inCutscene) {
             if (IsKeyPressed(KEY_ONE))   weapon.SelectSlot(1);
             if (IsKeyPressed(KEY_TWO))   weapon.SelectSlot(2);
             if (IsKeyPressed(KEY_THREE)) weapon.SelectSlot(3);
@@ -284,13 +315,11 @@ int main() {
             float targetFov = (horizSpeed > 7.5f) ? 83.0f : 75.0f;
             camera.fovy += (targetFov - camera.fovy) * std::min(10.0f * dt, 1.0f);
 
-            // Atualiza posição e orientação do ouvinte 3D
             Vector3 eyePos = player.GetEyePosition();
             Vector3 forward = player.GetForward3D();
             Vector3 listenerRight = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
             audio.UpdateListener(eyePos, forward, listenerRight);
 
-            // Passos do jogador no solo
             if (player.isGrounded && horizSpeed > 1.8f && !player.isDowned) {
                 float stepRate = player.isSprinting ? 0.30f : (player.isCrouched ? 0.55f : 0.40f);
                 playerStepTimer += dt;
@@ -564,7 +593,6 @@ int main() {
                 prevAllyDowned[i] = allies[i].isDowned;
             }
 
-            // Registra quantidade de tracers antes da IA agir para espacializar os tiros em 3D
             size_t prevTracers = tracers.size();
 
             if (!allies.empty() || !enemies.empty()) {
@@ -572,7 +600,6 @@ int main() {
                 UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
             }
 
-            // Áudio espacial 3D para cada disparo efetuado por aliados ou inimigos
             for (size_t t = prevTracers; t < tracers.size(); t++) {
                 bool isEnemyShot = (tracers[t].color.r > 180 && tracers[t].color.b < 80);
                 SfxId shotSfx = isEnemyShot ? SfxId::RIFLE : SfxId::LMG;
@@ -580,7 +607,6 @@ int main() {
                 audio.Play3D(shotSfx, tracers[t].start, 0.68f, pitch, 48.0f);
             }
 
-            // Passos espaciais 3D dos aliados em deslocamento
             botStepTimer += dt;
             if (botStepTimer >= 0.45f) {
                 botStepTimer = 0.0f;
@@ -609,9 +635,16 @@ int main() {
                 if (tracers[i].timer <= 0.0f) tracers.erase(tracers.begin() + i);
                 else i++;
             }
+        } else if (inCutscene) {
+            // Durante a cutscene, a câmera segue o trilho cinematográfico
+            GetMouseDelta(); // Consome delta do mouse para evitar salto ao voltar
+            cutscenes.ApplyToCamera(camera);
+            Vector3 camFwd = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+            Vector3 camRight = Vector3Normalize(Vector3CrossProduct(camFwd, camera.up));
+            audio.UpdateListener(camera.position, camFwd, camRight);
         }
 
-        // Atualiza Trilha Sonora Dinâmica com base no Aggro do esquadrão e inimigos ativos
+        // Atualiza Trilha Sonora Dinâmica
         float maxAllyAggro = 0.0f;
         for (const auto& ally : allies) {
             if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
@@ -625,6 +658,7 @@ int main() {
             }
             float hostileFactor = std::min(1.0f, activeHostiles * 0.25f);
             rawTension = std::clamp(std::max(peakAggro, hostileFactor * 0.70f), 0.0f, 1.0f);
+            if (inCutscene) rawTension *= 0.45f;
         }
         audio.UpdateDynamicMusic(dt, rawTension, true);
 
@@ -646,6 +680,7 @@ int main() {
                 }
 
                 mission.Draw3D(assets);
+                cutscenes.DrawTriggers3D();
 
                 for (const auto& ally : allies) {
                     assets.DrawAlly(ally, enemies, currentOrder, animTime);
@@ -689,261 +724,266 @@ int main() {
                     DrawLine3D(t.start, t.end, t.color);
                 }
 
-                if (!missionEnded) {
+                if (!missionEnded && !inCutscene) {
                     weapon.Draw(camera, isStealthFlank, assets);
                 }
             EndMode3D();
 
             // =================================================================
-            // HUD 2D
+            // HUD 2D (Oculta HUD de combate durante Cutscenes)
             // =================================================================
             int cx = largura / 2;
             int cy = altura / 2;
 
-            int nearbyDownedIdx = -1;
-            for (size_t i = 0; i < allies.size(); i++) {
-                if (allies[i].isDowned && Vector3Distance(player.pos, allies[i].pos) < 2.8f) {
-                    nearbyDownedIdx = (int)i;
-                    break;
-                }
-            }
-
-            if (!missionEnded) {
-                Vector2 playerLook2D = Vector2Normalize({ sinf(player.yaw), cosf(player.yaw) });
-                Vector2 playerRight2D = { -playerLook2D.y, playerLook2D.x };
-                for (const auto& dmg : damageIndicators) {
-                    Vector2 toAttacker = { dmg.attackerPos.x - player.pos.x, dmg.attackerPos.z - player.pos.z };
-                    if (Vector2Length(toAttacker) < 0.01f) continue;
-                    toAttacker = Vector2Normalize(toAttacker);
-
-                    float fwdDot = Vector2DotProduct(playerLook2D, toAttacker);
-                    float rightDot = Vector2DotProduct(playerRight2D, toAttacker);
-                    float relAngle = atan2f(rightDot, fwdDot);
-
-                    float ringRadius = 78.0f;
-                    float dirX = sinf(relAngle);
-                    float dirY = -cosf(relAngle);
-                    Vector2 tip = { cx + dirX * (ringRadius + 16.0f), cy + dirY * (ringRadius + 16.0f) };
-                    Vector2 perp = { -dirY, dirX };
-                    Vector2 base1 = { cx + dirX * ringRadius + perp.x * 12.0f, cy + dirY * ringRadius + perp.y * 12.0f };
-                    Vector2 base2 = { cx + dirX * ringRadius - perp.x * 12.0f, cy + dirY * ringRadius - perp.y * 12.0f };
-
-                    float alpha = std::clamp(dmg.timer / 0.65f, 0.0f, 1.0f) * 0.85f;
-                    DrawTriangle(tip, base2, base1, Fade(RED, alpha));
-                }
-            }
-
-            if (reloadAssetsBannerTimer > 0.0f) {
-                const char* reloadMsg = TextFormat("ASSETS RECARREGADOS: %d .GLB  |  %d SFX .OGG/.WAV", assets.loadedCount, audio.externalSfxCount);
-                DrawText(reloadMsg, cx - MeasureText(reloadMsg, 17) / 2, 114, 17, SKYBLUE);
-            }
-
-            if (currentMode == GameMode::MOVEMENT_TEST) {
-                float unitsPerSec = horizSpeed * 50.0f;
-                Color speedColor = (unitsPerSec > 495.0f) ? GREEN : (player.isSprinting ? SKYBLUE : RAYWHITE);
-                const char* postura = player.isCrouched ? "AGACHADO" : (player.isSprinting ? "CORRENDO" : "EM PE");
-                const char* arStatus = player.isGrounded ? "NO CHAO" : "NO AR (AIR STRAFE)";
-
-                DrawText("MODO: PISTA DE MOVIMENTACAO (SOURCE PHYSICS)", 20, 20, 18, SKYBLUE);
-                DrawText(TextFormat("Posicao: X=%.1f  Y=%.2f  Z=%.1f", player.pos.x, player.pos.y, player.pos.z), 20, 46, 16, LIGHTGRAY);
-                DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
-
-                DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
-                DrawText("1-5: Armas | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | F7: Reload Assets | ESC: Menu",
-                         20, altura - 26, 14, LIGHTGRAY);
-            } else {
-                if (tacticalPing.type == PingType::MOVE_COVER) {
-                    Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
-                    if (Vector3DotProduct(forward, Vector3Subtract(beaconTop, eyePos)) > 0.0f) {
-                        Vector2 pScreen = GetWorldToScreen(beaconTop, camera);
-                        if (pScreen.x > 0 && pScreen.x < largura && pScreen.y > 0 && pScreen.y < altura) {
-                            const char* pingTag = TextFormat("COBERTURA [%s]", allies[tacticalPing.assignedAllyId - 1].name.c_str());
-                            DrawText(pingTag, (int)pScreen.x - MeasureText(pingTag, 13) / 2, (int)pScreen.y - 16, 13, SKYBLUE);
-                        }
-                    }
-                }
-
-                for (const auto& ally : allies) {
-                    float headOffset = ally.isDowned ? 1.2f : (ally.isSuppressed ? 1.6f : 2.15f);
-                    Vector3 headWorld = { ally.pos.x, ally.pos.y + headOffset, ally.pos.z };
-                    if (Vector3DotProduct(forward, Vector3Subtract(headWorld, eyePos)) <= 0.0f) continue;
-
-                    Vector2 screenPos = GetWorldToScreen(headWorld, camera);
-                    if (screenPos.x <= 0 || screenPos.x >= largura || screenPos.y <= 0 || screenPos.y >= altura) continue;
-
-                    if (ally.isDowned) {
-                        const char* alert = TextFormat("%s CAIDO! (%.0fs)", ally.name.c_str(), ally.bleedoutTimer);
-                        DrawText(alert, (int)screenPos.x - MeasureText(alert, 15) / 2, (int)screenPos.y - 28, 15, RED);
-
-                        if (Vector3Distance(player.pos, ally.pos) < 3.0f) {
-                            const char* prompt = "[E] ARRASTAR  |  [F] REANIMAR";
-                            DrawText(prompt, (int)screenPos.x - MeasureText(prompt, 14) / 2, (int)screenPos.y - 10, 14, YELLOW);
-                        }
-
-                        if (ally.reviveProgress > 0.0f) {
-                            DrawRectangle((int)screenPos.x - 40, (int)screenPos.y + 10, 80, 10, BLACK);
-                            DrawRectangle((int)screenPos.x - 38, (int)screenPos.y + 12, (int)(76 * ally.reviveProgress), 6, GREEN);
-                        }
-                    } else {
-                        DrawRectangle((int)screenPos.x - 30, (int)screenPos.y - 8, 60, 7, BLACK);
-                        DrawRectangle((int)screenPos.x - 29, (int)screenPos.y - 7, (int)(58 * (ally.hp / 100.0f)), 5, ally.color);
-
-                        DrawRectangle((int)screenPos.x - 30, (int)screenPos.y + 1, 60, 5, BLACK);
-                        Color suppCol = ally.isSuppressed ? ORANGE : YELLOW;
-                        DrawRectangle((int)screenPos.x - 29, (int)screenPos.y + 2, (int)(58 * (ally.suppression / 100.0f)), 3, suppCol);
-
-                        if (ally.isSuppressed) {
-                            const char* suppTxt = "SUPRIMIDO!";
-                            DrawText(suppTxt, (int)screenPos.x - MeasureText(suppTxt, 12) / 2, (int)screenPos.y - 23, 12, ORANGE);
-                        } else if (ally.hasPingOrder) {
-                            const char* moveTxt = "INDO P/ COBERTURA";
-                            DrawText(moveTxt, (int)screenPos.x - MeasureText(moveTxt, 12) / 2, (int)screenPos.y - 23, 12, SKYBLUE);
-                        }
-                    }
-                }
-
-                for (size_t eIdx = 0; eIdx < enemies.size(); eIdx++) {
-                    const auto& enemy = enemies[eIdx];
-                    if (!enemy.IsAlive()) continue;
-                    float headOffset = enemy.isSuppressed ? 1.65f : 2.25f;
-                    Vector3 headWorld = { enemy.pos.x, enemy.pos.y + headOffset, enemy.pos.z };
-                    if (Vector3DotProduct(forward, Vector3Subtract(headWorld, eyePos)) <= 0.0f) continue;
-
-                    Vector2 screenPos = GetWorldToScreen(headWorld, camera);
-                    if (screenPos.x > 0 && screenPos.x < largura && screenPos.y > 0 && screenPos.y < altura) {
-                        DrawRectangle((int)screenPos.x - 30, (int)screenPos.y - 6, 60, 7, BLACK);
-                        DrawRectangle((int)screenPos.x - 29, (int)screenPos.y - 5, (int)(58 * (enemy.hp / enemy.maxHp)), 5, RED);
-
-                        DrawRectangle((int)screenPos.x - 30, (int)screenPos.y + 3, 60, 5, BLACK);
-                        Color enemySuppCol = enemy.isSuppressed ? ORANGE : YELLOW;
-                        DrawRectangle((int)screenPos.x - 29, (int)screenPos.y + 4, (int)(58 * (enemy.suppression / 100.0f)), 3, enemySuppCol);
-
-                        bool isPinged = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
-                        if (isPinged) {
-                            const char* focusTag = "[ALVO PRIORITARIO]";
-                            DrawText(focusTag, (int)screenPos.x - MeasureText(focusTag, 13) / 2, (int)screenPos.y - 36, 13, YELLOW);
-                        }
-
-                        const char* statusTag = enemy.isSuppressed
-                            ? "SUPRIMIDO!"
-                            : ((enemy.currentTargetId == -1) ? "SEM ALVO" : ((enemy.currentTargetId == 0) ? "ALVO: VOCE!" : TextFormat("ALVO: ALIADO %d", enemy.currentTargetId)));
-                        Color tagColor = enemy.isSuppressed ? YELLOW : ((enemy.currentTargetId == 0) ? RED : ORANGE);
-                        DrawText(statusTag, (int)screenPos.x - MeasureText(statusTag, 12) / 2, (int)screenPos.y - 21, 12, tagColor);
-                    }
-                }
-
-                if (orderBannerTimer > 0.0f) {
-                    const char* orderCallout = TextFormat("ORDEM AO ESQUADRAO: %s", GetOrderLabel(currentOrder));
-                    Color bannerCol = (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : ((currentOrder == SquadOrder::ADVANCE) ? GREEN : SKYBLUE);
-                    DrawText(orderCallout, cx - MeasureText(orderCallout, 20) / 2, 85, 20, bannerCol);
-                }
-
-                if (player.isDowned && !missionEnded) {
-                    DrawRectangleLinesEx({ 0, 0, (float)largura, (float)altura }, 12, Fade(RED, 0.65f));
-                    const char* downMsg = TextFormat("VOCE CAIU! SANGRAMENTO EM %.0fs...", std::max(0.0f, 25.0f - mission.playerDownedTimer));
-                    DrawText(downMsg, cx - MeasureText(downMsg, 22) / 2, cy + 50, 22, RED);
-
-                    if (player.reviveProgress > 0.0f) {
-                        DrawRectangle(cx - 120, cy + 85, 240, 18, BLACK);
-                        DrawRectangle(cx - 118, cy + 87, (int)(236 * player.reviveProgress), 14, GREEN);
-                        DrawText("REANIMANDO...", cx - 55, cy + 110, 16, GREEN);
-                    }
-                } else if (player.draggingAllyId != -1) {
-                    const char* dragMsg = TextFormat("ARRASTANDO %s PARA COBERTURA (PODE ATIRAR!)", allies[player.draggingAllyId - 1].name.c_str());
-                    DrawText(dragMsg, cx - MeasureText(dragMsg, 18) / 2, altura - 135, 18, YELLOW);
-                }
-
-                int barW = 320;
-                int barX = cx - barW / 2;
-                DrawRectangle(barX - 2, 18, barW + 4, 24, BLACK);
-                Color aggroBarColor = player.isDowned ? GRAY : (isStealthFlank ? SKYBLUE : ((player.aggro > 65.0f) ? RED : ORANGE));
-                DrawRectangle(barX, 20, (int)(barW * (player.aggro / 100.0f)), 20, aggroBarColor);
-
-                const char* statusText = player.isDowned
-                    ? "CAIDO (AMEACA ZERO)"
-                    : (isStealthFlank ? "FURTIVO (2x DANO NOS FLANCOS)" : ((player.aggro > 65.0f) ? "AGGRO MAXIMO" : "AMEACA MODERADA"));
-                DrawText(statusText, cx - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
-
-                DrawText("ESQUADRAO:", 20, 20, 16, WHITE);
-                DrawText(TextFormat("Voce (Alpha): HP %.0f | Aggro %.0f%% %s", player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
-                         20, 44, 16, player.isDowned ? RED : aggroBarColor);
-
+            if (!inCutscene) {
+                int nearbyDownedIdx = -1;
                 for (size_t i = 0; i < allies.size(); i++) {
-                    const auto& a = allies[i];
-                    const char* tagExtra = a.isSuppressed ? "[SUPRIMIDO]" : (a.hasPingOrder ? "[PING: COBERTURA]" : "");
-                    const char* allyLine = a.isDowned
-                        ? TextFormat("%s: [CAIDO - %.0fs]", a.name.c_str(), a.bleedoutTimer)
-                        : TextFormat("%s: HP %.0f | Aggro %.0f%% %s", a.name.c_str(), a.hp, a.aggro, tagExtra);
-                    Color lineColor = a.isDowned ? RED : (a.isSuppressed ? ORANGE : a.color);
-                    DrawText(allyLine, 20, 68 + (int)i * 22, 15, lineColor);
-                }
-
-                int cmdX = largura - 340;
-                DrawText("COMANDOS DO ESQUADRAO:", cmdX, 20, 16, WHITE);
-                DrawText("[F1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
-                DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
-                DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
-                DrawText("[Scroll Click] Ping Contextual", cmdX, 110, 15, (tacticalPing.type != PingType::NONE) ? YELLOW : LIGHTGRAY);
-                DrawText(TextFormat("[M] Som: %s | Trilha: %.0f%%", audio.muted ? "MUDO" : "3D ON", audio.musicTension * 100.0f),
-                         cmdX, 134, 14, audio.muted ? RED : (audio.musicTension > 0.55f ? ORANGE : GREEN));
-
-                DrawText("1-5: Armas | Scroll: Ping | F1-F3: Ordens | E: Arrastar | F: Interagir | F5: Reiniciar | F7: Reload Assets | ESC: Menu",
-                         20, altura - 26, 13, LIGHTGRAY);
-            }
-
-            const WeaponStats& wStats = weapon.GetCurrentStats();
-            int hudW = 330;
-            int hudH = 88;
-            int hudX = largura - hudW - 20;
-            int hudY = altura - hudH - 42;
-
-            DrawRectangle(hudX, hudY, hudW, hudH, Color{ 18, 22, 30, 215 });
-            DrawRectangleLinesEx({ (float)hudX, (float)hudY, (float)hudW, (float)hudH }, 1.5f, wStats.accentColor);
-
-            const char* slotNames[5] = { "[1] PRIM", "[2] SEC", "[3] FACA", "[4] FRAG", "[5] FLASH" };
-            for (int s = 1; s <= 5; s++) {
-                bool active = (weapon.currentSlot == s);
-                DrawText(slotNames[s - 1], hudX + 10 + (s - 1) * 63, hudY + 8, 12, active ? wStats.accentColor : GRAY);
-            }
-
-            DrawText(wStats.name, hudX + 12, hudY + 28, 19, WHITE);
-
-            if (weapon.isReloading) {
-                DrawText("RECARREGANDO...", hudX + 12, hudY + 56, 15, YELLOW);
-            } else if (wStats.isMelee) {
-                DrawText("CORPO A CORPO (SILENCIOSO)", hudX + 12, hudY + 56, 14, LIME);
-            } else {
-                const char* ammoTxt = TextFormat("MUNICAO: %d / %d", weapon.GetCurrentAmmo(), wStats.magSize);
-                DrawText(ammoTxt, hudX + 12, hudY + 56, 15, (weapon.GetCurrentAmmo() == 0) ? RED : LIGHTGRAY);
-
-                if (wStats.penetrationPower > 0.0f) {
-                    DrawText(TextFormat("PEN: %.2fm", wStats.penetrationPower), hudX + 225, hudY + 57, 13, ORANGE);
-                } else if (weapon.currentSlot == 1 || weapon.currentSlot == 2) {
-                    DrawText(TextFormat("[Aperte %d]", weapon.currentSlot), hudX + 235, hudY + 57, 12, SKYBLUE);
-                }
-            }
-
-            if (!missionEnded) {
-                DrawCircleLines(cx, cy, (wStats.id == WeaponId::SHOTGUN) ? 14.0f : 5.0f, isStealthFlank ? SKYBLUE : GREEN);
-
-                if (hitmarker.timer > 0.0f) {
-                    float ratio = hitmarker.timer / hitmarker.maxDuration;
-                    float inner = 6.0f + (1.0f - ratio) * 4.0f;
-                    float outer = 14.0f + (1.0f - ratio) * 6.0f;
-                    Color hmCol = Fade(hitmarker.color, std::min(1.0f, ratio * 1.4f));
-
-                    DrawLineEx({ cx - outer, cy - outer }, { cx - inner, cy - inner }, 2.2f, hmCol);
-                    DrawLineEx({ cx + outer, cy - outer }, { cx + inner, cy - inner }, 2.2f, hmCol);
-                    DrawLineEx({ cx - outer, cy + outer }, { cx - inner, cy + inner }, 2.2f, hmCol);
-                    DrawLineEx({ cx + outer, cy + outer }, { cx + inner, cy + inner }, 2.2f, hmCol);
-
-                    if (hitmarker.callout[0] != '\0') {
-                        DrawText(hitmarker.callout, cx - MeasureText(hitmarker.callout, 14) / 2, cy + 20, 14, hmCol);
+                    if (allies[i].isDowned && Vector3Distance(player.pos, allies[i].pos) < 2.8f) {
+                        nearbyDownedIdx = (int)i;
+                        break;
                     }
                 }
+
+                if (!missionEnded) {
+                    Vector2 playerLook2D = Vector2Normalize({ sinf(player.yaw), cosf(player.yaw) });
+                    Vector2 playerRight2D = { -playerLook2D.y, playerLook2D.x };
+                    for (const auto& dmg : damageIndicators) {
+                        Vector2 toAttacker = { dmg.attackerPos.x - player.pos.x, dmg.attackerPos.z - player.pos.z };
+                        if (Vector2Length(toAttacker) < 0.01f) continue;
+                        toAttacker = Vector2Normalize(toAttacker);
+
+                        float fwdDot = Vector2DotProduct(playerLook2D, toAttacker);
+                        float rightDot = Vector2DotProduct(playerRight2D, toAttacker);
+                        float relAngle = atan2f(rightDot, fwdDot);
+
+                        float ringRadius = 78.0f;
+                        float dirX = sinf(relAngle);
+                        float dirY = -cosf(relAngle);
+                        Vector2 tip = { cx + dirX * (ringRadius + 16.0f), cy + dirY * (ringRadius + 16.0f) };
+                        Vector2 perp = { -dirY, dirX };
+                        Vector2 base1 = { cx + dirX * ringRadius + perp.x * 12.0f, cy + dirY * ringRadius + perp.y * 12.0f };
+                        Vector2 base2 = { cx + dirX * ringRadius - perp.x * 12.0f, cy + dirY * ringRadius - perp.y * 12.0f };
+
+                        float alpha = std::clamp(dmg.timer / 0.65f, 0.0f, 1.0f) * 0.85f;
+                        DrawTriangle(tip, base2, base1, Fade(RED, alpha));
+                    }
+                }
+
+                if (reloadAssetsBannerTimer > 0.0f) {
+                    const char* reloadMsg = TextFormat("ASSETS RECARREGADOS: %d .GLB  |  %d SFX .OGG/.WAV", assets.loadedCount, audio.externalSfxCount);
+                    DrawText(reloadMsg, cx - MeasureText(reloadMsg, 17) / 2, 114, 17, SKYBLUE);
+                }
+
+                if (currentMode == GameMode::MOVEMENT_TEST) {
+                    float unitsPerSec = horizSpeed * 50.0f;
+                    Color speedColor = (unitsPerSec > 495.0f) ? GREEN : (player.isSprinting ? SKYBLUE : RAYWHITE);
+                    const char* postura = player.isCrouched ? "AGACHADO" : (player.isSprinting ? "CORRENDO" : "EM PE");
+                    const char* arStatus = player.isGrounded ? "NO CHAO" : "NO AR (AIR STRAFE)";
+
+                    DrawText("MODO: PISTA DE MOVIMENTACAO (SOURCE PHYSICS)", 20, 20, 18, SKYBLUE);
+                    DrawText(TextFormat("Posicao: X=%.1f  Y=%.2f  Z=%.1f", player.pos.x, player.pos.y, player.pos.z), 20, 46, 16, LIGHTGRAY);
+                    DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
+
+                    DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
+                    DrawText("1-5: Armas | Shift: Correr | F5: Reiniciar | F6: Cutscene | F7: Reload | ESC: Menu",
+                             20, altura - 26, 14, LIGHTGRAY);
+                } else {
+                    if (tacticalPing.type == PingType::MOVE_COVER) {
+                        Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
+                        if (Vector3DotProduct(forward, Vector3Subtract(beaconTop, eyePos)) > 0.0f) {
+                            Vector2 pScreen = GetWorldToScreen(beaconTop, camera);
+                            if (pScreen.x > 0 && pScreen.x < largura && pScreen.y > 0 && pScreen.y < altura) {
+                                const char* pingTag = TextFormat("COBERTURA [%s]", allies[tacticalPing.assignedAllyId - 1].name.c_str());
+                                DrawText(pingTag, (int)pScreen.x - MeasureText(pingTag, 13) / 2, (int)pScreen.y - 16, 13, SKYBLUE);
+                            }
+                        }
+                    }
+
+                    for (const auto& ally : allies) {
+                        float headOffset = ally.isDowned ? 1.2f : (ally.isSuppressed ? 1.6f : 2.15f);
+                        Vector3 headWorld = { ally.pos.x, ally.pos.y + headOffset, ally.pos.z };
+                        if (Vector3DotProduct(forward, Vector3Subtract(headWorld, eyePos)) <= 0.0f) continue;
+
+                        Vector2 screenPos = GetWorldToScreen(headWorld, camera);
+                        if (screenPos.x <= 0 || screenPos.x >= largura || screenPos.y <= 0 || screenPos.y >= altura) continue;
+
+                        if (ally.isDowned) {
+                            const char* alert = TextFormat("%s CAIDO! (%.0fs)", ally.name.c_str(), ally.bleedoutTimer);
+                            DrawText(alert, (int)screenPos.x - MeasureText(alert, 15) / 2, (int)screenPos.y - 28, 15, RED);
+
+                            if (Vector3Distance(player.pos, ally.pos) < 3.0f) {
+                                const char* prompt = "[E] ARRASTAR  |  [F] REANIMAR";
+                                DrawText(prompt, (int)screenPos.x - MeasureText(prompt, 14) / 2, (int)screenPos.y - 10, 14, YELLOW);
+                            }
+
+                            if (ally.reviveProgress > 0.0f) {
+                                DrawRectangle((int)screenPos.x - 40, (int)screenPos.y + 10, 80, 10, BLACK);
+                                DrawRectangle((int)screenPos.x - 38, (int)screenPos.y + 12, (int)(76 * ally.reviveProgress), 6, GREEN);
+                            }
+                        } else {
+                            DrawRectangle((int)screenPos.x - 30, (int)screenPos.y - 8, 60, 7, BLACK);
+                            DrawRectangle((int)screenPos.x - 29, (int)screenPos.y - 7, (int)(58 * (ally.hp / 100.0f)), 5, ally.color);
+
+                            DrawRectangle((int)screenPos.x - 30, (int)screenPos.y + 1, 60, 5, BLACK);
+                            Color suppCol = ally.isSuppressed ? ORANGE : YELLOW;
+                            DrawRectangle((int)screenPos.x - 29, (int)screenPos.y + 2, (int)(58 * (ally.suppression / 100.0f)), 3, suppCol);
+
+                            if (ally.isSuppressed) {
+                                const char* suppTxt = "SUPRIMIDO!";
+                                DrawText(suppTxt, (int)screenPos.x - MeasureText(suppTxt, 12) / 2, (int)screenPos.y - 23, 12, ORANGE);
+                            } else if (ally.hasPingOrder) {
+                                const char* moveTxt = "INDO P/ COBERTURA";
+                                DrawText(moveTxt, (int)screenPos.x - MeasureText(moveTxt, 12) / 2, (int)screenPos.y - 23, 12, SKYBLUE);
+                            }
+                        }
+                    }
+
+                    for (size_t eIdx = 0; eIdx < enemies.size(); eIdx++) {
+                        const auto& enemy = enemies[eIdx];
+                        if (!enemy.IsAlive()) continue;
+                        float headOffset = enemy.isSuppressed ? 1.65f : 2.25f;
+                        Vector3 headWorld = { enemy.pos.x, enemy.pos.y + headOffset, enemy.pos.z };
+                        if (Vector3DotProduct(forward, Vector3Subtract(headWorld, eyePos)) <= 0.0f) continue;
+
+                        Vector2 screenPos = GetWorldToScreen(headWorld, camera);
+                        if (screenPos.x > 0 && screenPos.x < largura && screenPos.y > 0 && screenPos.y < altura) {
+                            DrawRectangle((int)screenPos.x - 30, (int)screenPos.y - 6, 60, 7, BLACK);
+                            DrawRectangle((int)screenPos.x - 29, (int)screenPos.y - 5, (int)(58 * (enemy.hp / enemy.maxHp)), 5, RED);
+
+                            DrawRectangle((int)screenPos.x - 30, (int)screenPos.y + 3, 60, 5, BLACK);
+                            Color enemySuppCol = enemy.isSuppressed ? ORANGE : YELLOW;
+                            DrawRectangle((int)screenPos.x - 29, (int)screenPos.y + 4, (int)(58 * (enemy.suppression / 100.0f)), 3, enemySuppCol);
+
+                            bool isPinged = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
+                            if (isPinged) {
+                                const char* focusTag = "[ALVO PRIORITARIO]";
+                                DrawText(focusTag, (int)screenPos.x - MeasureText(focusTag, 13) / 2, (int)screenPos.y - 36, 13, YELLOW);
+                            }
+
+                            const char* statusTag = enemy.isSuppressed
+                                ? "SUPRIMIDO!"
+                                : ((enemy.currentTargetId == -1) ? "SEM ALVO" : ((enemy.currentTargetId == 0) ? "ALVO: VOCE!" : TextFormat("ALVO: ALIADO %d", enemy.currentTargetId)));
+                            Color tagColor = enemy.isSuppressed ? YELLOW : ((enemy.currentTargetId == 0) ? RED : ORANGE);
+                            DrawText(statusTag, (int)screenPos.x - MeasureText(statusTag, 12) / 2, (int)screenPos.y - 21, 12, tagColor);
+                        }
+                    }
+
+                    if (orderBannerTimer > 0.0f) {
+                        const char* orderCallout = TextFormat("ORDEM AO ESQUADRAO: %s", GetOrderLabel(currentOrder));
+                        Color bannerCol = (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : ((currentOrder == SquadOrder::ADVANCE) ? GREEN : SKYBLUE);
+                        DrawText(orderCallout, cx - MeasureText(orderCallout, 20) / 2, 85, 20, bannerCol);
+                    }
+
+                    if (player.isDowned && !missionEnded) {
+                        DrawRectangleLinesEx({ 0, 0, (float)largura, (float)altura }, 12, Fade(RED, 0.65f));
+                        const char* downMsg = TextFormat("VOCE CAIU! SANGRAMENTO EM %.0fs...", std::max(0.0f, 25.0f - mission.playerDownedTimer));
+                        DrawText(downMsg, cx - MeasureText(downMsg, 22) / 2, cy + 50, 22, RED);
+
+                        if (player.reviveProgress > 0.0f) {
+                            DrawRectangle(cx - 120, cy + 85, 240, 18, BLACK);
+                            DrawRectangle(cx - 118, cy + 87, (int)(236 * player.reviveProgress), 14, GREEN);
+                            DrawText("REANIMANDO...", cx - 55, cy + 110, 16, GREEN);
+                        }
+                    } else if (player.draggingAllyId != -1) {
+                        const char* dragMsg = TextFormat("ARRASTANDO %s PARA COBERTURA (PODE ATIRAR!)", allies[player.draggingAllyId - 1].name.c_str());
+                        DrawText(dragMsg, cx - MeasureText(dragMsg, 18) / 2, altura - 135, 18, YELLOW);
+                    }
+
+                    int barW = 320;
+                    int barX = cx - barW / 2;
+                    DrawRectangle(barX - 2, 18, barW + 4, 24, BLACK);
+                    Color aggroBarColor = player.isDowned ? GRAY : (isStealthFlank ? SKYBLUE : ((player.aggro > 65.0f) ? RED : ORANGE));
+                    DrawRectangle(barX, 20, (int)(barW * (player.aggro / 100.0f)), 20, aggroBarColor);
+
+                    const char* statusText = player.isDowned
+                        ? "CAIDO (AMEACA ZERO)"
+                        : (isStealthFlank ? "FURTIVO (2x DANO NOS FLANCOS)" : ((player.aggro > 65.0f) ? "AGGRO MAXIMO" : "AMEACA MODERADA"));
+                    DrawText(statusText, cx - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
+
+                    DrawText("ESQUADRAO:", 20, 20, 16, WHITE);
+                    DrawText(TextFormat("Voce (Alpha): HP %.0f | Aggro %.0f%% %s", player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
+                             20, 44, 16, player.isDowned ? RED : aggroBarColor);
+
+                    for (size_t i = 0; i < allies.size(); i++) {
+                        const auto& a = allies[i];
+                        const char* tagExtra = a.isSuppressed ? "[SUPRIMIDO]" : (a.hasPingOrder ? "[PING: COBERTURA]" : "");
+                        const char* allyLine = a.isDowned
+                            ? TextFormat("%s: [CAIDO - %.0fs]", a.name.c_str(), a.bleedoutTimer)
+                            : TextFormat("%s: HP %.0f | Aggro %.0f%% %s", a.name.c_str(), a.hp, a.aggro, tagExtra);
+                        Color lineColor = a.isDowned ? RED : (a.isSuppressed ? ORANGE : a.color);
+                        DrawText(allyLine, 20, 68 + (int)i * 22, 15, lineColor);
+                    }
+
+                    int cmdX = largura - 340;
+                    DrawText("COMANDOS DO ESQUADRAO:", cmdX, 20, 16, WHITE);
+                    DrawText("[F1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
+                    DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
+                    DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
+                    DrawText("[Scroll Click] Ping Contextual", cmdX, 110, 15, (tacticalPing.type != PingType::NONE) ? YELLOW : LIGHTGRAY);
+                    DrawText(TextFormat("[M] Som: %s | Trilha: %.0f%%", audio.muted ? "MUDO" : "3D ON", audio.musicTension * 100.0f),
+                             cmdX, 134, 14, audio.muted ? RED : (audio.musicTension > 0.55f ? ORANGE : GREEN));
+
+                    DrawText("1-5: Armas | F1-F3: Ordens | E/F: Interagir | F5: Reiniciar | F6: Cutscene | F8: Triggers | ESC: Menu",
+                             20, altura - 26, 13, LIGHTGRAY);
+                }
+
+                const WeaponStats& wStats = weapon.GetCurrentStats();
+                int hudW = 330;
+                int hudH = 88;
+                int hudX = largura - hudW - 20;
+                int hudY = altura - hudH - 42;
+
+                DrawRectangle(hudX, hudY, hudW, hudH, Color{ 18, 22, 30, 215 });
+                DrawRectangleLinesEx({ (float)hudX, (float)hudY, (float)hudW, (float)hudH }, 1.5f, wStats.accentColor);
+
+                const char* slotNames[5] = { "[1] PRIM", "[2] SEC", "[3] FACA", "[4] FRAG", "[5] FLASH" };
+                for (int s = 1; s <= 5; s++) {
+                    bool active = (weapon.currentSlot == s);
+                    DrawText(slotNames[s - 1], hudX + 10 + (s - 1) * 63, hudY + 8, 12, active ? wStats.accentColor : GRAY);
+                }
+
+                DrawText(wStats.name, hudX + 12, hudY + 28, 19, WHITE);
+
+                if (weapon.isReloading) {
+                    DrawText("RECARREGANDO...", hudX + 12, hudY + 56, 15, YELLOW);
+                } else if (wStats.isMelee) {
+                    DrawText("CORPO A CORPO (SILENCIOSO)", hudX + 12, hudY + 56, 14, LIME);
+                } else {
+                    const char* ammoTxt = TextFormat("MUNICAO: %d / %d", weapon.GetCurrentAmmo(), wStats.magSize);
+                    DrawText(ammoTxt, hudX + 12, hudY + 56, 15, (weapon.GetCurrentAmmo() == 0) ? RED : LIGHTGRAY);
+
+                    if (wStats.penetrationPower > 0.0f) {
+                        DrawText(TextFormat("PEN: %.2fm", wStats.penetrationPower), hudX + 225, hudY + 57, 13, ORANGE);
+                    } else if (weapon.currentSlot == 1 || weapon.currentSlot == 2) {
+                        DrawText(TextFormat("[Aperte %d]", weapon.currentSlot), hudX + 235, hudY + 57, 12, SKYBLUE);
+                    }
+                }
+
+                if (!missionEnded) {
+                    DrawCircleLines(cx, cy, (wStats.id == WeaponId::SHOTGUN) ? 14.0f : 5.0f, isStealthFlank ? SKYBLUE : GREEN);
+
+                    if (hitmarker.timer > 0.0f) {
+                        float ratio = hitmarker.timer / hitmarker.maxDuration;
+                        float inner = 6.0f + (1.0f - ratio) * 4.0f;
+                        float outer = 14.0f + (1.0f - ratio) * 6.0f;
+                        Color hmCol = Fade(hitmarker.color, std::min(1.0f, ratio * 1.4f));
+
+                        DrawLineEx({ cx - outer, cy - outer }, { cx - inner, cy - inner }, 2.2f, hmCol);
+                        DrawLineEx({ cx + outer, cy - outer }, { cx + inner, cy - inner }, 2.2f, hmCol);
+                        DrawLineEx({ cx - outer, cy + outer }, { cx - inner, cy + inner }, 2.2f, hmCol);
+                        DrawLineEx({ cx + outer, cy + outer }, { cx + inner, cy + inner }, 2.2f, hmCol);
+
+                        if (hitmarker.callout[0] != '\0') {
+                            DrawText(hitmarker.callout, cx - MeasureText(hitmarker.callout, 14) / 2, cy + 20, 14, hmCol);
+                        }
+                    }
+                }
+
+                mission.DrawHUD(largura, altura, camera, player, (nearbyDownedIdx != -1));
             }
 
-            mission.DrawHUD(largura, altura, camera, player, (nearbyDownedIdx != -1));
+            // Renderiza Letterbox e Legendas (também anima o recolhimento suave após o fim)
+            cutscenes.DrawHUD(largura, altura);
         EndDrawing();
     }
 

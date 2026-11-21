@@ -126,23 +126,17 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `AssetManager.hpp`: Classe `AssetManager` com carregamento automático de modelos `.glb` e animações esqueléticas (`LoadModel`, `LoadModelAnimations`, `UpdateModelAnimation`) em `assets/models/` para personagens (`ally.glb`, `enemy.glb`), 8 armas/gadgets (`weapon_*.glb`) e objetos (`barrel.glb`, `crate.glb`, `terminal.glb`), com **fallback automático para os cubos procedurais** quando o arquivo `.glb` não existe.
   - **Hot-Reload (`F7`):** Recarrega os modelos `.glb` em tempo real sem fechar o jogo após exportar no Blender.
 
-### [SAVEPOINT_16 — ATUAL] Áudio Espacial 3D & Arquivos Externos (`.ogg`/`.wav`) (`Audio.hpp`, `main.cpp`)
+### [SAVEPOINT_16] Áudio Espacial 3D & Arquivos Externos (`.ogg`/`.wav`) (`Audio.hpp`, `main.cpp`)
 - **Status:** Implementado e modularizado (`Audio.hpp`, `main.cpp`).
 - **Adicionado:**
   - `Audio.hpp`: Carregamento híbrido em `assets/sfx/` e `assets/music/` via `LoadSound` / `LoadMusicStream` com fallback procedural PCM, pool de vozes (`LoadSoundAlias`) para tiros simultâneos, `Play3D` com atenuação quadrática por distância e *panning* estéreo via produto escalar com `listenerRight`, além de trilha dinâmica com *crossfade* contínuo entre ambiente e combate (`UpdateDynamicMusic`).
   - `main.cpp`: Atualização do *listener* 3D, espacialização de disparos de aliados/inimigos, passos e explosões em 3D, e *hot-reload* unificado com `[F7]`.
-  
-[SAVEPOINT_17] Sistema de Cutscenes & Eventos Roteirizados (Cutscene.hpp)
 
-    Arquivos: Cutscene.hpp (novo), World.hpp, main.cpp
-
-    O que resolve: Narrativa de entrada nas fases, apresentação de emboscadas e eventos cinematográficos.
-
-    Mecânicas:
-
-        Trilhos de Câmera (Keyframes): Interpolação suave de posição e alvo da câmera 3D, ocultando o HUD de combate e ativando barras pretas (letterbox) com legendas sincronizadas.
-
-        Gatilhos de Área (Trigger Zones): Caixas invisíveis no mapa que disparam diálogos de rádio, abrem portões ou fazem reforços inimigos surgirem quando o jogador cruza uma sala.
+### [SAVEPOINT_17 — ATUAL] Cutscenes & Gatilhos de Área (`Cutscene.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`Cutscene.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `Cutscene.hpp`: Classe `CutsceneManager` com trilhos de câmera suaves via interpolação `SmootherStep` (posição, alvo e FOV), barras *letterbox* animadas, legendas táticas sincronizadas por *keyframe* com botão de pular (`[ESPAÇO]`), e *Trigger Zones* (`BoundingBox`) no cenário para disparos automáticos de eventos (introdução da missão, avanço no pátio central e aproximação da extração).
+  - Controles de desenvolvimento: `[F6]` para disparar a cutscene de demonstração manualmente e `[F8]` para alternar a visualização 3D das *Trigger Zones*.
 
 [SAVEPOINT_18] Menu de Loadout, Configurações e Save Persistente
 

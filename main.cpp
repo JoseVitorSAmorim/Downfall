@@ -8,6 +8,7 @@
 #include "MapEditor.hpp"
 #include "AssetManager.hpp"
 #include "Cutscene.hpp"
+#include "SaveSystem.hpp"
 
 struct HitmarkerFeedback {
     float timer = 0.0f;
@@ -23,9 +24,12 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
                         std::vector<DamageIndicator>& damageIndicators,
                         SquadOrder& currentOrder, TacticalPing& tacticalPing,
                         HitmarkerFeedback& hitmarker, MissionManager& mission,
-                        CutsceneManager& cutscenes, Camera3D& camera, ProceduralAudio& audio) {
+                        CutsceneManager& cutscenes, Camera3D& camera, ProceduralAudio& audio,
+                        const SaveSystem& saveSystem) {
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
+    saveSystem.ApplyLoadoutToWeapon(weapon);
+
     tracers.clear();
     grenades.clear();
     explosions.clear();
@@ -59,6 +63,23 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
             { 3, "Delta",   {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 50.0f, 1.3f, 4.2f, GOLD }
         };
         ResetWave(enemies);
+
+        // Escala dificuldade e reforços conforme a fase escolhida no Briefing (1..3)
+        int phase = saveSystem.data.selectedPhase;
+        if (phase >= 2) {
+            int nextId = (int)enemies.size() + 1;
+            enemies.push_back({ nextId++, { -11.5f, 0.0f, -6.5f }, 110.0f, 110.0f });
+            enemies.push_back({ nextId++, {  11.5f, 0.0f, -6.5f }, 110.0f, 110.0f });
+        }
+        if (phase >= 3) {
+            int nextId = (int)enemies.size() + 1;
+            enemies.push_back({ nextId++, { 0.0f, 0.0f, -15.5f }, 140.0f, 140.0f });
+            for (auto& e : enemies) {
+                e.maxHp += 25.0f;
+                e.hp = e.maxHp;
+            }
+        }
+
         mission.SetupForMode(true, false);
     }
 
@@ -66,12 +87,12 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     Vector3 target = Vector3Add(eye, player.GetForward3D());
     camera.position = eye;
     camera.target = target;
-    camera.fovy = 75.0f;
+    camera.fovy = saveSystem.data.baseFov;
 
     bool isCampaign = (mode != GameMode::MOVEMENT_TEST && mode != GameMode::SUPPRESSION_RANGE);
     cutscenes.SetupForMode(isCampaign, eye, target);
     if (isCampaign) {
-        cutscenes.Play(0, eye, target, 75.0f, audio);
+        cutscenes.Play(0, eye, target, saveSystem.data.baseFov, audio);
     }
 }
 
@@ -86,12 +107,16 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Cutscenes & Trigger Zones (SAVEPOINT_17)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Loadout, Configuracoes & Save (SAVEPOINT_18)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
+    SaveSystem saveSystem;
+    saveSystem.Load();
+
     ProceduralAudio audio;
     audio.Init();
+    saveSystem.ApplyAudioSettings(audio);
 
     AssetManager assets;
     assets.Init();
@@ -101,6 +126,7 @@ int main() {
     CutsceneManager cutscenes;
     GameMode currentMode = GameMode::MAIN_MENU;
     bool shouldQuit = false;
+    bool victoryRecordedForRun = false;
 
     std::vector<WorldBlock> world;
     SourcePlayer player;
@@ -124,7 +150,7 @@ int main() {
 
     Camera3D camera = {};
     camera.up = { 0.0f, 1.0f, 0.0f };
-    camera.fovy = 75.0f;
+    camera.fovy = saveSystem.data.baseFov;
     camera.projection = CAMERA_PERSPECTIVE;
 
     while (!WindowShouldClose() && !shouldQuit) {
@@ -132,6 +158,7 @@ int main() {
         animTime += dt;
 
         if (reloadAssetsBannerTimer > 0.0f) reloadAssetsBannerTimer -= dt;
+        if (saveSystem.saveBannerTimer > 0.0f) saveSystem.saveBannerTimer -= dt;
 
         if (IsKeyPressed(KEY_M)) {
             audio.ToggleMute();
@@ -141,12 +168,13 @@ int main() {
         if (IsKeyPressed(KEY_F7)) {
             assets.ReloadAll();
             audio.ReloadExternalAssets();
+            saveSystem.ApplyAudioSettings(audio);
             reloadAssetsBannerTimer = 2.6f;
             audio.PlayOrder();
         }
 
         // =====================================================================
-        // ESTADO 1: MENU DE INICIALIZAÇÃO
+        // ESTADO 1: MENU DE INICIALIZAÇÃO, BRIEFING/LOADOUT E CONFIGURAÇÕES
         // =====================================================================
         if (currentMode == GameMode::MAIN_MENU) {
             if (IsCursorHidden()) EnableCursor();
@@ -154,11 +182,17 @@ int main() {
             audio.UpdateDynamicMusic(dt, 0.0f, false);
 
             if (IsKeyPressed(KEY_ESCAPE)) {
-                shouldQuit = true;
-                continue;
+                if (menu.IsInSubScreen()) {
+                    saveSystem.Save();
+                    menu.ReturnToMain();
+                    audio.PlayOrder();
+                } else {
+                    shouldQuit = true;
+                    continue;
+                }
             }
 
-            GameMode chosen = menu.Update(largura, altura);
+            GameMode chosen = menu.Update(largura, altura, saveSystem, audio);
             if (chosen == GameMode::EXIT_GAME) {
                 shouldQuit = true;
                 continue;
@@ -169,19 +203,21 @@ int main() {
                 DisableCursor();
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio);
+                victoryRecordedForRun = false;
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem);
+                menu.ReturnToMain();
                 DisableCursor();
             }
 
             BeginDrawing();
-                menu.Draw(largura, altura);
+                menu.Draw(largura, altura, saveSystem);
                 const char* audioTag = audio.muted
                     ? "[M] Som: MUDO"
-                    : TextFormat("[M] Audio 3D: ON (%d SFX / %d Musicas .ogg/.wav)", audio.externalSfxCount, audio.externalMusicCount);
-                DrawText(audioTag, 24, 24, 15, audio.muted ? RED : GREEN);
+                    : TextFormat("[M] Audio 3D: ON (%d SFX / %d Musicas)", audio.externalSfxCount, audio.externalMusicCount);
+                DrawText(audioTag, 24, 16, 14, audio.muted ? RED : GREEN);
 
-                const char* assetTag = TextFormat("[F7] Modelos Blender (.glb): %d / %d carregados", assets.loadedCount, assets.totalSlots);
-                DrawText(assetTag, 24, 48, 15, (assets.loadedCount > 0) ? SKYBLUE : LIGHTGRAY);
+                const char* assetTag = TextFormat("[F7] Modelos .glb: %d/%d", assets.loadedCount, assets.totalSlots);
+                DrawText(assetTag, largura - MeasureText(assetTag, 14) - 24, 16, 14, (assets.loadedCount > 0) ? SKYBLUE : LIGHTGRAY);
             EndDrawing();
             continue;
         }
@@ -224,10 +260,10 @@ int main() {
         if (hitmarker.timer > 0.0f) hitmarker.timer -= dt;
 
         if (IsKeyPressed(KEY_F5)) {
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio);
+            victoryRecordedForRun = false;
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem);
         }
 
-        // Teclas de debug/teste das cutscenes e trigger zones
         if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying()) {
             Vector3 eye = player.GetEyePosition();
             Vector3 tgt = Vector3Add(eye, player.GetForward3D());
@@ -242,6 +278,12 @@ int main() {
             ResetWave(enemies);
             tacticalPing.Clear();
             audio.PlayOrder();
+        }
+
+        // Registra vitória no savegame.cfg uma única vez por partida concluída
+        if (mission.state == MissionState::VICTORY && !victoryRecordedForRun) {
+            victoryRecordedForRun = true;
+            saveSystem.RecordMissionVictory(saveSystem.data.selectedPhase, mission.stats.enemiesEliminated, mission.stats.headshotsLanded);
         }
 
         bool missionEnded = (mission.state == MissionState::VICTORY || mission.state == MissionState::DEFEAT);
@@ -299,7 +341,7 @@ int main() {
 
             bool wasGrounded = player.isGrounded;
             Vector2 mouseDelta = GetMouseDelta();
-            player.UpdateLook(mouseDelta, 0.0022f);
+            player.UpdateLook(mouseDelta, saveSystem.data.mouseSensitivity);
             player.Update(dt, world);
 
             if (wasGrounded && !player.isGrounded && player.vel.y > 1.0f) {
@@ -312,7 +354,8 @@ int main() {
             }
 
             float horizSpeed = sqrtf(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
-            float targetFov = (horizSpeed > 7.5f) ? 83.0f : 75.0f;
+            float baseFov = saveSystem.data.baseFov;
+            float targetFov = (horizSpeed > 7.5f) ? (baseFov + 8.0f) : baseFov;
             camera.fovy += (targetFov - camera.fovy) * std::min(10.0f * dt, 1.0f);
 
             Vector3 eyePos = player.GetEyePosition();
@@ -636,8 +679,7 @@ int main() {
                 else i++;
             }
         } else if (inCutscene) {
-            // Durante a cutscene, a câmera segue o trilho cinematográfico
-            GetMouseDelta(); // Consome delta do mouse para evitar salto ao voltar
+            GetMouseDelta();
             cutscenes.ApplyToCamera(camera);
             Vector3 camFwd = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
             Vector3 camRight = Vector3Normalize(Vector3CrossProduct(camFwd, camera.up));
@@ -730,7 +772,7 @@ int main() {
             EndMode3D();
 
             // =================================================================
-            // HUD 2D (Oculta HUD de combate durante Cutscenes)
+            // HUD 2D
             // =================================================================
             int cx = largura / 2;
             int cy = altura / 2;
@@ -900,7 +942,7 @@ int main() {
                         : (isStealthFlank ? "FURTIVO (2x DANO NOS FLANCOS)" : ((player.aggro > 65.0f) ? "AGGRO MAXIMO" : "AMEACA MODERADA"));
                     DrawText(statusText, cx - MeasureText(statusText, 16) / 2, 48, 16, aggroBarColor);
 
-                    DrawText("ESQUADRAO:", 20, 20, 16, WHITE);
+                    DrawText(TextFormat("ESQUADRAO [FASE 0%d]:", saveSystem.data.selectedPhase), 20, 20, 16, WHITE);
                     DrawText(TextFormat("Voce (Alpha): HP %.0f | Aggro %.0f%% %s", player.hp, player.aggro, player.isDowned ? "[CAIDO]" : ""),
                              20, 44, 16, player.isDowned ? RED : aggroBarColor);
 
@@ -939,7 +981,8 @@ int main() {
                 const char* slotNames[5] = { "[1] PRIM", "[2] SEC", "[3] FACA", "[4] FRAG", "[5] FLASH" };
                 for (int s = 1; s <= 5; s++) {
                     bool active = (weapon.currentSlot == s);
-                    DrawText(slotNames[s - 1], hudX + 10 + (s - 1) * 63, hudY + 8, 12, active ? wStats.accentColor : GRAY);
+                    Color slotCol = active ? wStats.accentColor : ((s == (saveSystem.data.gadgetIndex == 1 ? 5 : 4)) ? LIME : GRAY);
+                    DrawText(slotNames[s - 1], hudX + 10 + (s - 1) * 63, hudY + 8, 12, slotCol);
                 }
 
                 DrawText(wStats.name, hudX + 12, hudY + 28, 19, WHITE);
@@ -982,11 +1025,11 @@ int main() {
                 mission.DrawHUD(largura, altura, camera, player, (nearbyDownedIdx != -1));
             }
 
-            // Renderiza Letterbox e Legendas (também anima o recolhimento suave após o fim)
             cutscenes.DrawHUD(largura, altura);
         EndDrawing();
     }
 
+    saveSystem.Save();
     assets.Shutdown();
     audio.Shutdown();
     CloseWindow();

@@ -132,24 +132,18 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Audio.hpp`: Carregamento híbrido em `assets/sfx/` e `assets/music/` via `LoadSound` / `LoadMusicStream` com fallback procedural PCM, pool de vozes (`LoadSoundAlias`) para tiros simultâneos, `Play3D` com atenuação quadrática por distância e *panning* estéreo via produto escalar com `listenerRight`, além de trilha dinâmica com *crossfade* contínuo entre ambiente e combate (`UpdateDynamicMusic`).
   - `main.cpp`: Atualização do *listener* 3D, espacialização de disparos de aliados/inimigos, passos e explosões em 3D, e *hot-reload* unificado com `[F7]`.
 
-### [SAVEPOINT_17 — ATUAL] Cutscenes & Gatilhos de Área (`Cutscene.hpp`, `main.cpp`, `Makefile`)
+### [SAVEPOINT_17] Cutscenes & Gatilhos de Área (`Cutscene.hpp`, `main.cpp`, `Makefile`)
 - **Status:** Implementado e modularizado (`Cutscene.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `Cutscene.hpp`: Classe `CutsceneManager` com trilhos de câmera suaves via interpolação `SmootherStep` (posição, alvo e FOV), barras *letterbox* animadas, legendas táticas sincronizadas por *keyframe* com botão de pular (`[ESPAÇO]`), e *Trigger Zones* (`BoundingBox`) no cenário para disparos automáticos de eventos (introdução da missão, avanço no pátio central e aproximação da extração).
   - Controles de desenvolvimento: `[F6]` para disparar a cutscene de demonstração manualmente e `[F8]` para alternar a visualização 3D das *Trigger Zones*.
 
-[SAVEPOINT_18] Menu de Loadout, Configurações e Save Persistente
-
-    Arquivos: Menu.hpp, SaveSystem.hpp (novo)
-
-    O que resolve: Permitir personalizar o equipamento antes da partida e salvar progresso/preferências.
-
-    Mecânicas:
-
-        Tela de Briefing / Loadout: Escolher sua arma primária, secundária e gadgets antes de iniciar a missão.
-
-        Configurações & Save: Sliders de sensibilidade do mouse, FOV, volume de SFX/Música e desbloqueio de fases salvos em savegame.cfg.
-
+### [SAVEPOINT_18 — ATUAL] Menu de Loadout, Configurações & Save Persistente (`SaveSystem.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`SaveSystem.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `SaveSystem.hpp`: Persistência automática em `savegame.cfg` (`chave=valor`) com loadout escolhido, sensibilidade do mouse, FOV base, volumes de SFX/Música, desbloqueio progressivo de fases (Fases 1 a 3) e estatísticas acumuladas (missões concluídas, abates totais e *headshots*).
+  - `Menu.hpp`: Tela de **Briefing & Loadout** (seleção de fase desbloqueada, arma primária, secundária e gadget prioritário) e tela de **Configurações & Save** com sliders arrastáveis pelo mouse ou setas do teclado e botões de salvar/restaurar/zerar progresso.
+  
 [SAVEPOINT_19] Multiplayer LAN (Host / Cliente via UDP)
 
     Arquivos: Network.hpp (novo), Menu.hpp, main.cpp

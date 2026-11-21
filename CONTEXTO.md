@@ -144,9 +144,71 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `SaveSystem.hpp`: Persistência automática em `savegame.cfg` (`chave=valor`) com loadout escolhido, sensibilidade do mouse, FOV base, volumes de SFX/Música, desbloqueio progressivo de fases (Fases 1 a 3) e estatísticas acumuladas (missões concluídas, abates totais e *headshots*).
   - `Menu.hpp`: Tela de **Briefing & Loadout** (seleção de fase desbloqueada, arma primária, secundária e gadget prioritário) e tela de **Configurações & Save** com sliders arrastáveis pelo mouse ou setas do teclado e botões de salvar/restaurar/zerar progresso.
   
-### [SAVEPOINT_19 — ATUAL] Multiplayer LAN (Host / Cliente via UDP) (`Network.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+### [SAVEPOINT_19] Multiplayer LAN (Host / Cliente via UDP) (`Network.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
 - **Status:** Implementado e modularizado (`Network.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `Network.hpp`: Classe `LanNetworkManager` com sockets UDP não-bloqueantes nativos do Linux (porta `27015`), detecção automática do IPv4 local (`getifaddrs`), arquitetura **Host-Autoritativo** (`NetClientInputPacket` e `NetWorldSnapshotPacket`), fila de eventos de rede (`SHOT_TRACER`, `EXPLOSION`) e timeout/reassunção automática por bots de IA.
   - `Menu.hpp`: Tela de **Lobby Multiplayer LAN** (`MenuScreen::LAN_LOBBY`) com formação de 4 slots (`Alpha`, `Bravo`, `Charlie`, `Delta`), criação de servidor Host, campo de IP editável e suporte a *drop-in* durante a partida.
   - `main.cpp`: Replicação completa de movimento, disparos, granadas, pings táticos, reanimação cooperativa (`[F]`), inimigos e progresso dos terminais/extração.
+
+###  [SAVEPOINT_20] Particionamento Espacial (SpatialHashGrid) (World.hpp, SquadAI.hpp, Weapon.hpp, main.cpp)
+- **Status:** Implementado e modularizado (World.hpp, SquadAI.hpp, Weapon.hpp, main.cpp).
+- **Adicionado:**
+
+  - World.hpp: Classe SpatialHashGrid com células 4.0m × 4.0m no plano XZ (std::unordered_map<CellKey, std::vector<int>, CellKeyHash>), deduplicação sem alocação via visitedStamp, travessia 2D DDA (TraverseRayXZ), consultas QueryAABB e cache automático GetWorldSpatialGrid acelerando OverlapsAnyBlock, GetClosestWallDistance e HasLineOfSight para O(1)O(1).
+
+        SquadAI.hpp: MoveCharacterWithCollision, FindBestCoverPoint, ProcessTacticalPing, UpdateAllies e UpdateEnemies atualizados para consultar apenas as células locais do SpatialHashGrid na movimentação AABB, busca de cobertura e linha de visão.
+
+        Weapon.hpp: TraceBallisticShot e UpdateGrenades otimizados com travessia DDA e consultas AABB na grade espacial para balística com wallbang e rebote físico de granadas.
+
+  [SAVEPOINT_21 — ATUAL] Navegação Dinâmica (NavGrid A*) & Física de Rampas/Escadas (Navigation.hpp, World.hpp, Player.hpp, SquadAI.hpp)
+
+    Status: Implementado e modularizado (Navigation.hpp, World.hpp, Player.hpp, SquadAI.hpp).
+
+    Adicionado:
+
+        Navigation.hpp: Classe NavGrid com geração automática de malha de navegação caminhável multi-andar (Build em células de 1.0m), conexões 8-direcionais com verificação de quinas e desníveis, busca de caminho A* com heurística octile/3D (FindPath), suavização string-pulling (HasClearWalkLine) e cache sincronizado GetWorldNavGrid.
+
+        World.hpp & Player.hpp: Suporte a rampas inclinadas (SlopeDir: POS_X, NEG_X, POS_Z, NEG_Z) com cálculo contínuo de altura (GetSurfaceYAt / GetMaxSurfaceUnderBox), renderização 3D (DrawWorldBlock), resolução automática de degraus (MAX_STEP_HEIGHT = 0.55f) e aderência ao solo na descida de rampas sem perder velocidade horizontal.
+
+        SquadAI.hpp: Integração de NavigateAgentTo (A*) e suporte a degraus/rampas em MoveCharacterWithCollision, UpdateAllies e UpdateEnemies para aliados e inimigos contornarem salas fechadas, corredores em L e múltiplos andares.
+        
+[SAVEPOINT_22] Arquitetura Orientada a Eventos (Event Bus) & Unificação de Entidades (Events.hpp, Combatant.hpp, main.cpp)
+
+    Status: Planejado (Desacoplamento de Núcleo).
+
+    Objetivo:
+
+        Implementar um barramento de eventos (EventManager::Emit(...) para EnemyKilledEvent, DamageDealtEvent, ObjectiveCompletedEvent) para que Audio, SaveSystem, MissionManager, Hitmarker e LanNetworkManager reajam sem acoplamento direto no loop principal.
+
+        Unificar SourcePlayer e SquadAlly sob uma interface/componente comum (Combatant), eliminando duplicação de lógica de dano, reanimação, supressão e inventário.
+
+[SAVEPOINT_23] Cenários Orientados a Dados (Data-Driven Scene Serialization) (World.hpp, Objectives.hpp, Cutscene.hpp, MapEditor.hpp)
+
+    Status: Planejado (Pipeline de Conteúdo).
+
+    Objetivo:
+
+        Expandir o formato de arquivo de cenário (.scene / .txt tipado) para serializar entidades jogáveis (SPAWN_ALLY, SPAWN_ENEMY, TERMINAL, BARREL, CRATE, EXTRACT, TRIGGER) junto aos blocos geométricos.
+
+        Permitir posicionar, editar e exportar esses marcadores diretamente dentro do InGameMapEditor, criando fases completas sem recompilar o código C++.
+
+[SAVEPOINT_24] Interpolação de Snapshots & Canal Confiável no Netcode (Network.hpp, main.cpp)
+
+    Status: Planejado (Estabilidade Multiplayer).
+
+    Objetivo:
+
+        Buffer de Interpolação (Entity Interpolation): Manter os últimos 2–3 NetWorldSnapshotPacket com timestamp no cliente e interpolar (Vector3Lerp) a posição de aliados e inimigos com ~50 ms de atraso visual para movimento fluido a 144 FPS mesmo com jitter em Wi-Fi.
+
+        Canal Confiável Leve (ACK Bitmask): Garantir retransmissão automática com confirmação para eventos críticos (spawn de granada, conclusão de hack, início e fim de missão).
+
+[SAVEPOINT_25] Ferramentas de Diagnóstico: Console In-Game & Frame Profiler (DevTools.hpp, main.cpp)
+
+    Status: Planejado (Inspeção e Depuração em Tempo Real).
+
+    Objetivo:
+
+        Frame Profiler (F9): Exibir overlay com o tempo em milissegundos de cada subsistema (Física, IA, Balística, Rede, Render) e contagem de chamadas de raycast.
+
+        Console de Desenvolvedor (' / F10): Terminal sobreposto no jogo aceitando comandos em tempo real (map mapa_squad.txt, net_fakelag 80, ai_freeze 1, god 1, spawn_enemy).

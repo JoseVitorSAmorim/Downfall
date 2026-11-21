@@ -155,12 +155,12 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         int phase = net.IsClient() && net.hasSnapshot ? (int)net.latestSnapshot.phase : saveSystem.data.selectedPhase;
         if (phase >= 2) {
             int nextId = (int)enemies.size() + 1;
-            enemies.push_back({ nextId++, { -11.5f, 0.0f, -6.5f }, 110.0f, 110.0f });
-            enemies.push_back({ nextId++, {  11.5f, 0.0f, -6.5f }, 110.0f, 110.0f });
+            enemies.push_back({ nextId++, { -11.5f, 0.0f, -6.5f }, { -11.5f, 0.0f, -6.5f }, 110.0f, 110.0f, 0.7f, 0.5f, 0.0f, false, -1 });
+            enemies.push_back({ nextId++, {  11.5f, 0.0f, -6.5f }, {  11.5f, 0.0f, -6.5f }, 110.0f, 110.0f, 0.9f, 1.5f, 0.0f, false, -1 });
         }
         if (phase >= 3) {
             int nextId = (int)enemies.size() + 1;
-            enemies.push_back({ nextId++, { 0.0f, 0.0f, -15.5f }, 140.0f, 140.0f });
+            enemies.push_back({ nextId++, { 0.0f, 0.0f, -15.5f }, { 0.0f, 0.0f, -15.5f }, 140.0f, 140.0f, 0.6f, 2.2f, 0.0f, false, -1 });
             for (auto& e : enemies) {
                 e.maxHp += 25.0f;
                 e.hp = e.maxHp;

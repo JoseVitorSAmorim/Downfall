@@ -4,28 +4,29 @@
 #include "raymath.h"
 #include "World.hpp"
 #include "Player.hpp"
+#include "Navigation.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
 #include <algorithm>
 
 enum class SquadOrder {
-    ADVANCE,
+    ADVANCE = 0,
     HOLD,
     SUPPRESS
 };
 
 inline const char* GetOrderLabel(SquadOrder order) {
     switch (order) {
-        case SquadOrder::ADVANCE:  return "[F1] AVANCAR";
-        case SquadOrder::HOLD:     return "[F2] MANTER POSICAO";
-        case SquadOrder::SUPPRESS: return "[F3] FOGO DE SUPRESSAO (PUXAR AGGRO)";
+        case SquadOrder::ADVANCE:  return "AVANCAR [F1]";
+        case SquadOrder::HOLD:     return "MANTER POSICAO [F2]";
+        case SquadOrder::SUPPRESS: return "FOGO DE SUPRESSAO [F3]";
+        default:                   return "MANTER POSICAO";
     }
-    return "";
 }
 
 enum class PingType {
-    NONE,
+    NONE = 0,
     MOVE_COVER,
     FOCUS_TARGET
 };
@@ -36,7 +37,6 @@ struct TacticalPing {
     int assignedAllyId = -1;
     int targetEnemyIdx = -1;
     float timer = 0.0f;
-    float pulseAnim = 0.0f;
 
     void Clear() {
         type = PingType::NONE;
@@ -52,215 +52,306 @@ struct DamageIndicator {
 };
 
 struct SquadAlly {
-    int id;
-    std::string name;
-    Vector3 pos;
-    Vector3 anchorPos;
-    Vector3 coverPos;
-    float hp;
-    float aggro;
-    float fireTimer;
-    float coverSearchTimer;
-    Color color;
+    int id = 1;
+    std::string name = "Bravo";
+    Vector3 pos = { 0.0f, 0.0f, 0.0f };
+    Vector3 spawnPos = { 0.0f, 0.0f, 0.0f };
+    Vector3 anchorPos = { 0.0f, 0.0f, 0.0f };
+    float hp = 100.0f;
+    float aggro = 50.0f;
+    float shootCooldown = 0.5f;
+    float strafePhase = 0.0f;
+    Color color = SKYBLUE;
 
-    float maxHp = 100.0f;
+    bool isDowned = false;
+    bool isBeingDragged = false;
+    float reviveProgress = 0.0f;
+    float bleedoutTimer = 25.0f;
+
     float lastHp = 100.0f;
     float suppression = 0.0f;
     bool isSuppressed = false;
-    bool isDowned = false;
-    float bleedoutTimer = 25.0f;
-    float reviveProgress = 0.0f;
-    bool isBeingDragged = false;
+    bool hasCoverPos = false;
+    Vector3 coverPos = { 0.0f, 0.0f, 0.0f };
+    float coverSearchTimer = 0.0f;
+
     bool hasPingOrder = false;
+    Vector3 pingTargetPos = { 0.0f, 0.0f, 0.0f };
+
+    // Navegação Dinâmica A* (SAVEPOINT_21)
+    std::vector<Vector3> navPath;
+    int navWaypointIdx = 0;
+    float navRepathTimer = 0.0f;
+    Vector3 navGoalPos = { 0.0f, 0.0f, 0.0f };
 
     Vector3 GetEyePos() const {
-        float h = isDowned ? 0.45f : (isSuppressed ? 1.05f : 1.55f);
-        return { pos.x, pos.y + h, pos.z };
-    }
-
-    BoundingBox GetTorsoAABB() const {
-        if (isDowned) {
-            return { { pos.x - 0.42f, pos.y, pos.z - 0.75f }, { pos.x + 0.42f, pos.y + 0.55f, pos.z + 0.75f } };
-        }
-        float torsoTop = isSuppressed ? 0.88f : 1.32f;
-        return {
-            { pos.x - 0.40f, pos.y, pos.z - 0.40f },
-            { pos.x + 0.40f, pos.y + torsoTop, pos.z + 0.40f }
-        };
-    }
-
-    BoundingBox GetHeadAABB() const {
-        if (isDowned) {
-            return { { pos.x - 0.25f, pos.y + 0.25f, pos.z - 0.75f }, { pos.x + 0.25f, pos.y + 0.55f, pos.z - 0.35f } };
-        }
-        float headMinY = isSuppressed ? 0.88f : 1.32f;
-        float headMaxY = isSuppressed ? 1.26f : 1.82f;
-        return {
-            { pos.x - 0.30f, pos.y + headMinY, pos.z - 0.30f },
-            { pos.x + 0.30f, pos.y + headMaxY, pos.z + 0.30f }
-        };
-    }
-
-    BoundingBox GetAABB() const {
-        float h = isDowned ? 0.55f : (isSuppressed ? 1.26f : 1.82f);
-        return {
-            { pos.x - 0.40f, pos.y, pos.z - 0.40f },
-            { pos.x + 0.40f, pos.y + h, pos.z + 0.40f }
-        };
+        float eyeH = isDowned ? 0.55f : (isSuppressed ? 1.15f : 1.65f);
+        return { pos.x, pos.y + eyeH, pos.z };
     }
 };
 
 struct EnemyBot {
-    int id;
-    Vector3 pos;
-    Vector3 coverPos;
-    float hp = 100.0f;
-    float maxHp = 100.0f;
-    float fireTimer = 0.0f;
-    float coverSearchTimer = 0.0f;
+    int id = 1;
+    Vector3 pos = { 0.0f, 0.0f, 0.0f };
+    Vector3 spawnPos = { 0.0f, 0.0f, 0.0f };
+    float hp = 150.0f;
+    float maxHp = 150.0f;
+    float shootTimer = 0.8f;
+    float strafePhase = 0.0f;
     float suppression = 0.0f;
     bool isSuppressed = false;
     int currentTargetId = -1;
 
+    float lastHp = -1.0f;
+    bool hasCoverPos = false;
+    Vector3 coverPos = { 0.0f, 0.0f, 0.0f };
+    float coverSearchTimer = 0.0f;
+
+    // Navegação Dinâmica A* (SAVEPOINT_21)
+    std::vector<Vector3> navPath;
+    int navWaypointIdx = 0;
+    float navRepathTimer = 0.0f;
+    Vector3 navGoalPos = { 0.0f, 0.0f, 0.0f };
+
     bool IsAlive() const { return hp > 0.0f; }
 
     Vector3 GetEyePos() const {
-        float h = isSuppressed ? 1.05f : 1.65f;
-        return { pos.x, pos.y + h, pos.z };
+        float eyeH = isSuppressed ? 1.15f : 1.65f;
+        return { pos.x, pos.y + eyeH, pos.z };
     }
 
-    // Hitbox do Torso (dano 1.0x)
     BoundingBox GetTorsoAABB() const {
-        float torsoTop = isSuppressed ? 0.88f : 1.38f;
-        float halfW = isSuppressed ? 0.52f : 0.50f;
+        float h = isSuppressed ? 1.00f : 1.50f;
         return {
-            { pos.x - halfW, pos.y, pos.z - halfW },
-            { pos.x + halfW, pos.y + torsoTop, pos.z + halfW }
+            { pos.x - 0.36f, pos.y, pos.z - 0.36f },
+            { pos.x + 0.36f, pos.y + h, pos.z + 0.36f }
         };
     }
 
-    // Hitbox da Cabeça (dano 2.5x crítico)
     BoundingBox GetHeadAABB() const {
-        float headMinY = isSuppressed ? 0.88f : 1.38f;
-        float headMaxY = isSuppressed ? 1.28f : 1.92f;
-        float halfW = 0.36f;
+        float baseH = isSuppressed ? 1.00f : 1.50f;
         return {
-            { pos.x - halfW, pos.y + headMinY, pos.z - halfW },
-            { pos.x + halfW, pos.y + headMaxY, pos.z + halfW }
-        };
-    }
-
-    BoundingBox GetAABB() const {
-        float h = isSuppressed ? 1.28f : 1.92f;
-        return {
-            { pos.x - 0.50f, pos.y, pos.z - 0.50f },
-            { pos.x + 0.50f, pos.y + h, pos.z + 0.50f }
+            { pos.x - 0.20f, pos.y + baseH, pos.z - 0.20f },
+            { pos.x + 0.20f, pos.y + baseH + 0.38f, pos.z + 0.20f }
         };
     }
 };
 
 inline void ResetWave(std::vector<EnemyBot>& enemies) {
-    enemies = {
-        { 1, { -8.0f, 0.0f, -15.0f }, { -8.0f, 0.0f, -15.0f }, 100.0f, 100.0f, 0.5f, 0.0f, 0.0f, false, -1 },
-        { 2, { -2.5f, 0.0f, -17.5f }, { -2.5f, 0.0f, -17.5f }, 100.0f, 100.0f, 1.1f, 0.5f, 0.0f, false, -1 },
-        { 3, {  3.5f, 0.0f, -17.5f }, {  3.5f, 0.0f, -17.5f }, 100.0f, 100.0f, 0.8f, 1.0f, 0.0f, false, -1 },
-        { 4, {  9.0f, 0.0f, -14.5f }, {  9.0f, 0.0f, -14.5f }, 100.0f, 100.0f, 1.4f, 1.5f, 0.0f, false, -1 }
-    };
+    enemies.clear();
+    enemies.push_back({ 1, { -8.0f, 0.0f, -11.0f }, { -8.0f, 0.0f, -11.0f }, 150.0f, 150.0f, 0.5f, 0.0f, 0.0f, false, -1 });
+    enemies.push_back({ 2, { -2.8f, 0.0f, -13.5f }, { -2.8f, 0.0f, -13.5f }, 150.0f, 150.0f, 0.8f, 1.2f, 0.0f, false, -1 });
+    enemies.push_back({ 3, {  2.8f, 0.0f, -13.5f }, {  2.8f, 0.0f, -13.5f }, 150.0f, 150.0f, 1.0f, 2.4f, 0.0f, false, -1 });
+    enemies.push_back({ 4, {  8.0f, 0.0f, -11.0f }, {  8.0f, 0.0f, -11.0f }, 150.0f, 150.0f, 0.7f, 3.6f, 0.0f, false, -1 });
 }
 
-inline void MoveAllyWithCollision(SquadAlly& ally, Vector3 target, float speed, float dt, const std::vector<WorldBlock>& world) {
-    Vector3 diff = Vector3Subtract(target, ally.pos);
-    diff.y = 0.0f;
-    float dist = Vector3Length(diff);
+// =============================================================================
+// MOVIMENTAÇÃO COM COLISÃO AABB, STEP-UP E RAMPAS (SAVEPOINT_21)
+// =============================================================================
+inline void MoveCharacterWithCollision(Vector3& pos, float radius, float height,
+                                       Vector3 targetPos, float speed, float dt,
+                                       const std::vector<WorldBlock>& world,
+                                       const SpatialHashGrid& grid) {
+    Vector3 diff = { targetPos.x - pos.x, 0.0f, targetPos.z - pos.z };
+    float dist = std::sqrt(diff.x * diff.x + diff.z * diff.z);
     if (dist < 0.08f) return;
 
-    Vector3 dir = Vector3Scale(diff, 1.0f / dist);
     float step = std::min(dist, speed * dt);
-    float r = 0.42f;
+    Vector3 dir = { diff.x / dist, 0.0f, diff.z / dist };
+    Vector3 boxSize = { radius * 2.0f, height, radius * 2.0f };
+    constexpr float BOT_MAX_STEP = 0.60f;
 
-    ally.pos.x += dir.x * step;
-    BoundingBox box = { { ally.pos.x - r, ally.pos.y + 0.1f, ally.pos.z - r }, { ally.pos.x + r, ally.pos.y + 1.7f, ally.pos.z + r } };
-    for (const auto& b : world) {
-        if (b.bounds.max.y <= ally.pos.y + 0.1f) continue;
-        if (CheckOverlapStrict(box, b.bounds)) {
-            ally.pos.x = (dir.x > 0.0f) ? (b.bounds.min.x - r) : (b.bounds.max.x + r);
-            break;
-        }
-    }
-
-    ally.pos.z += dir.z * step;
-    box = { { ally.pos.x - r, ally.pos.y + 0.1f, ally.pos.z - r }, { ally.pos.x + r, ally.pos.y + 1.7f, ally.pos.z + r } };
-    for (const auto& b : world) {
-        if (b.bounds.max.y <= ally.pos.y + 0.1f) continue;
-        if (CheckOverlapStrict(box, b.bounds)) {
-            ally.pos.z = (dir.z > 0.0f) ? (b.bounds.min.z - r) : (b.bounds.max.z + r);
-            break;
-        }
-    }
-}
-
-inline void MoveEnemyWithCollision(EnemyBot& enemy, Vector3 target, float speed, float dt, const std::vector<WorldBlock>& world) {
-    Vector3 diff = Vector3Subtract(target, enemy.pos);
-    diff.y = 0.0f;
-    float dist = Vector3Length(diff);
-    if (dist < 0.08f) return;
-
-    Vector3 dir = Vector3Scale(diff, 1.0f / dist);
-    float step = std::min(dist, speed * dt);
-    float r = 0.50f;
-
-    enemy.pos.x += dir.x * step;
-    BoundingBox box = { { enemy.pos.x - r, enemy.pos.y + 0.1f, enemy.pos.z - r }, { enemy.pos.x + r, enemy.pos.y + 1.8f, enemy.pos.z + r } };
-    for (const auto& b : world) {
-        if (b.bounds.max.y <= enemy.pos.y + 0.1f) continue;
-        if (CheckOverlapStrict(box, b.bounds)) {
-            enemy.pos.x = (dir.x > 0.0f) ? (b.bounds.min.x - r) : (b.bounds.max.x + r);
-            break;
-        }
-    }
-
-    enemy.pos.z += dir.z * step;
-    box = { { enemy.pos.x - r, enemy.pos.y + 0.1f, enemy.pos.z - r }, { enemy.pos.x + r, enemy.pos.y + 1.8f, enemy.pos.z + r } };
-    for (const auto& b : world) {
-        if (b.bounds.max.y <= enemy.pos.y + 0.1f) continue;
-        if (CheckOverlapStrict(box, b.bounds)) {
-            enemy.pos.z = (dir.z > 0.0f) ? (b.bounds.min.z - r) : (b.bounds.max.z + r);
-            break;
-        }
-    }
-}
-
-inline Vector3 FindProtectedCoverPos(Vector3 origin, Vector3 threatPos, const std::vector<WorldBlock>& world) {
-    Vector3 bestSpot = origin;
-    float bestScore = 99999.0f;
-
-    for (const auto& b : world) {
-        if (b.size.y < 1.1f || b.size.x > 16.0f || b.size.z > 16.0f) continue;
-
-        Vector3 awayDir = Vector3Subtract(b.pos, threatPos);
-        awayDir.y = 0.0f;
-        if (Vector3Length(awayDir) < 0.01f) awayDir = { 0.0f, 0.0f, 1.0f };
-        awayDir = Vector3Normalize(awayDir);
-
-        float offset = std::max(b.size.x, b.size.z) * 0.5f + 0.95f;
-        Vector3 candidate = {
-            std::clamp(b.pos.x + awayDir.x * offset, -22.0f, 22.0f),
-            0.0f,
-            std::clamp(b.pos.z + awayDir.z * offset, -22.0f, 22.0f)
+    auto tryAxisMove = [&](float dx, float dz) -> bool {
+        float nx = pos.x + dx;
+        float nz = pos.z + dz;
+        BoundingBox testBox = {
+            { nx - radius, pos.y,          nz - radius },
+            { nx + radius, pos.y + height, nz + radius }
         };
 
-        Vector3 candidateEye = { candidate.x, 1.1f, candidate.z };
-        Vector3 threatEye = { threatPos.x, 1.5f, threatPos.z };
+        bool blocked = false;
+        float liftY = pos.y;
 
-        if (!HasLineOfSight(candidateEye, threatEye, world)) {
-            float dist = Vector3Distance(origin, candidate);
-            if (dist < bestScore) {
-                bestScore = dist;
-                bestSpot = candidate;
+        grid.QueryAABB({ nx, pos.y + height * 0.5f, nz }, { radius * 2.1f, height + BOT_MAX_STEP, radius * 2.1f }, [&](int idx) -> bool {
+            const WorldBlock& blk = world[idx];
+            BoundingBox bb = blk.GetAABB();
+            if (!CheckOverlapStrict(testBox, bb)) return true;
+
+            if (blk.IsSlope()) {
+                float surfY = blk.GetMaxSurfaceUnderBox(testBox);
+                if (pos.y >= surfY - BOT_MAX_STEP) {
+                    liftY = std::max(liftY, surfY);
+                    return true;
+                }
+            } else {
+                float stepDelta = bb.max.y - pos.y;
+                if (stepDelta > 0.0f && stepDelta <= BOT_MAX_STEP) {
+                    liftY = std::max(liftY, bb.max.y);
+                    return true;
+                }
             }
+            blocked = true;
+            return false;
+        });
+
+        if (!blocked) {
+            if (liftY > pos.y + 1e-4f) {
+                if (!OverlapsAnyBlock({ nx, liftY + height * 0.5f, nz }, boxSize, world, grid)) {
+                    pos.x = nx;
+                    pos.z = nz;
+                    pos.y = liftY;
+                    return true;
+                }
+                return false;
+            }
+            pos.x = nx;
+            pos.z = nz;
+            return true;
+        }
+        return false;
+    };
+
+    // Eixo X com deslize lateral
+    if (!tryAxisMove(dir.x * step, 0.0f)) {
+        float slideSign = (dir.z >= 0.0f) ? 1.0f : -1.0f;
+        tryAxisMove(0.0f, slideSign * step * 0.70f);
+    }
+
+    // Eixo Z com deslize lateral
+    if (!tryAxisMove(0.0f, dir.z * step)) {
+        float slideSign = (dir.x >= 0.0f) ? 1.0f : -1.0f;
+        tryAxisMove(slideSign * step * 0.70f, 0.0f);
+    }
+
+    // Ajuste vertical de solo (descida de rampas ou degraus)
+    BoundingBox groundProbe = {
+        { pos.x - radius * 0.85f, pos.y - 1.5f, pos.z - radius * 0.85f },
+        { pos.x + radius * 0.85f, pos.y + 0.1f, pos.z + radius * 0.85f }
+    };
+    float bestFloorY = -1e30f;
+    bool foundFloor = false;
+
+    grid.QueryAABB({ pos.x, pos.y - 0.5f, pos.z }, { radius * 2.0f, 1.8f, radius * 2.0f }, [&](int idx) -> bool {
+        const WorldBlock& blk = world[idx];
+        BoundingBox bb = blk.GetAABB();
+        if (!CheckOverlapStrict(groundProbe, bb)) return true;
+
+        float floorY = blk.IsSlope() ? blk.GetMaxSurfaceUnderBox(groundProbe) : bb.max.y;
+        if (floorY <= pos.y + 0.05f && floorY > bestFloorY) {
+            bestFloorY = floorY;
+            foundFloor = true;
+        }
+        return true;
+    });
+
+    if (foundFloor) {
+        float drop = pos.y - bestFloorY;
+        if (drop <= 0.35f) {
+            pos.y = bestFloorY;
+        } else {
+            pos.y = std::max(bestFloorY, pos.y - 9.5f * dt);
         }
     }
-    return bestSpot;
+}
+
+inline void MoveCharacterWithCollision(Vector3& pos, float radius, float height,
+                                       Vector3 targetPos, float speed, float dt,
+                                       const std::vector<WorldBlock>& world) {
+    MoveCharacterWithCollision(pos, radius, height, targetPos, speed, dt, world, GetWorldSpatialGrid(world));
+}
+
+inline void MoveAllyWithCollision(SquadAlly& ally, Vector3 targetPos, float speed, float dt,
+                                  const std::vector<WorldBlock>& world) {
+    float h = ally.isDowned ? 0.70f : (ally.isSuppressed ? 1.25f : 1.80f);
+    MoveCharacterWithCollision(ally.pos, 0.38f, h, targetPos, speed, dt, world, GetWorldSpatialGrid(world));
+}
+
+// Navegação guiada por NavGrid A* (contorna salas fechadas, corredores em L e multi-andares)
+inline void NavigateAgentTo(Vector3& pos, float radius, float height,
+                            Vector3 goalPos, float speed, float dt,
+                            std::vector<Vector3>& navPath, int& navWaypointIdx,
+                            float& navRepathTimer, Vector3& cachedGoal,
+                            const std::vector<WorldBlock>& world,
+                            const SpatialHashGrid& spatialGrid,
+                            const NavGrid& navGrid) {
+    navRepathTimer -= dt;
+    float goalShift = Vector3Distance(goalPos, cachedGoal);
+
+    if (navPath.empty() || navWaypointIdx >= static_cast<int>(navPath.size()) ||
+        goalShift > 1.15f || navRepathTimer <= 0.0f) {
+        cachedGoal = goalPos;
+        navRepathTimer = 0.45f;
+        navWaypointIdx = 0;
+        navGrid.FindPath(pos, goalPos, world, spatialGrid, navPath);
+    }
+
+    if (navPath.empty()) {
+        MoveCharacterWithCollision(pos, radius, height, goalPos, speed, dt, world, spatialGrid);
+        return;
+    }
+
+    while (navWaypointIdx < static_cast<int>(navPath.size()) - 1) {
+        Vector3 wp = navPath[navWaypointIdx];
+        float dx = wp.x - pos.x;
+        float dz = wp.z - pos.z;
+        if (std::sqrt(dx * dx + dz * dz) < 0.42f && std::fabs(wp.y - pos.y) < 0.85f) {
+            navWaypointIdx++;
+        } else {
+            break;
+        }
+    }
+
+    Vector3 activeTarget = navPath[navWaypointIdx];
+    MoveCharacterWithCollision(pos, radius, height, activeTarget, speed, dt, world, spatialGrid);
+}
+
+inline bool FindBestCoverPoint(Vector3 charPos, Vector3 threatPos,
+                               const std::vector<WorldBlock>& world,
+                               Vector3& outCover) {
+    const SpatialHashGrid& grid = GetWorldSpatialGrid(world);
+    const NavGrid& navGrid = GetWorldNavGrid(world);
+    float bestScore = 1e30f;
+    bool found = false;
+
+    const float searchRadius = 15.0f;
+    Vector3 searchSize = { searchRadius * 2.0f, 5.0f, searchRadius * 2.0f };
+
+    grid.QueryAABB(charPos, searchSize, [&](int idx) -> bool {
+        const WorldBlock& b = world[idx];
+        if (b.IsSlope() || b.size.y < 0.85f || b.size.x > 25.0f || b.size.z > 25.0f) return true;
+
+        float margin = 0.85f;
+        Vector3 candidates[4] = {
+            { b.pos.x + b.size.x * 0.5f + margin, charPos.y, b.pos.z },
+            { b.pos.x - b.size.x * 0.5f - margin, charPos.y, b.pos.z },
+            { b.pos.x, charPos.y, b.pos.z + b.size.z * 0.5f + margin },
+            { b.pos.x, charPos.y, b.pos.z - b.size.z * 0.5f - margin }
+        };
+
+        for (Vector3 cand : candidates) {
+            int nIdx = navGrid.FindNearestNode(cand);
+            if (nIdx == -1) continue;
+            // Garante que o ponto está em célula caminhável acessível
+            if (Vector3Distance(cand, navGrid.FindNearestNode(cand) != -1 ? cand : cand) > 2.5f) continue;
+
+            if (OverlapsAnyBlock({ cand.x, cand.y + 0.65f, cand.z }, { 0.76f, 1.20f, 0.76f }, world, grid)) continue;
+
+            Vector3 eyeCheck = { cand.x, cand.y + 1.20f, cand.z };
+            if (!HasLineOfSight(threatPos, eyeCheck, world, grid)) {
+                float distToChar = Vector3Distance(charPos, cand);
+                float distToThreat = Vector3Distance(threatPos, cand);
+                float score = distToChar - distToThreat * 0.15f;
+                if (score < bestScore) {
+                    bestScore = score;
+                    outCover = cand;
+                    found = true;
+                }
+            }
+        }
+        return true;
+    });
+
+    return found;
 }
 
 inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
@@ -268,182 +359,132 @@ inline bool ProcessTacticalPing(Vector3 eyePos, Vector3 forward,
                                 std::vector<SquadAlly>& allies,
                                 const std::vector<EnemyBot>& enemies,
                                 TacticalPing& ping) {
+    const SpatialHashGrid& grid = GetWorldSpatialGrid(world);
+    const NavGrid& navGrid = GetWorldNavGrid(world);
     Ray ray = { eyePos, forward };
-    float closestDist = 90.0f;
-    int hitEnemyIdx = -1;
-    int hitBlockIdx = -1;
-    Vector3 hitPoint = { 0.0f, 0.0f, 0.0f };
 
+    int hitEnemy = -1;
+    float bestEnemyDist = 80.0f;
     for (size_t i = 0; i < enemies.size(); i++) {
         if (!enemies[i].IsAlive()) continue;
-        RayCollision col = GetRayCollisionBox(ray, enemies[i].GetAABB());
-        if (col.hit && col.distance < closestDist) {
-            closestDist = col.distance;
-            hitEnemyIdx = (int)i;
-            hitPoint = col.point;
+        RayCollision colTorso = GetRayCollisionBox(ray, enemies[i].GetTorsoAABB());
+        RayCollision colHead = GetRayCollisionBox(ray, enemies[i].GetHeadAABB());
+        float d = 1e30f;
+        if (colTorso.hit && colTorso.distance < d) d = colTorso.distance;
+        if (colHead.hit && colHead.distance < d) d = colHead.distance;
+
+        if (d < bestEnemyDist && HasLineOfSight(eyePos, enemies[i].GetEyePos(), world, grid)) {
+            bestEnemyDist = d;
+            hitEnemy = static_cast<int>(i);
         }
     }
 
-    if (hitEnemyIdx == -1) {
-        for (size_t b = 0; b < world.size(); b++) {
-            RayCollision col = GetRayCollisionBox(ray, world[b].bounds);
-            if (col.hit && col.distance < closestDist) {
-                closestDist = col.distance;
-                hitBlockIdx = (int)b;
-                hitPoint = col.point;
-            }
-        }
-    }
-
-    if (hitEnemyIdx == -1 && hitBlockIdx == -1) return false;
-
-    for (auto& ally : allies) {
-        ally.hasPingOrder = false;
-    }
-
-    if (hitEnemyIdx != -1) {
+    if (hitEnemy != -1) {
         ping.type = PingType::FOCUS_TARGET;
-        ping.targetEnemyIdx = hitEnemyIdx;
-        ping.assignedAllyId = -1;
-        ping.worldPos = enemies[hitEnemyIdx].pos;
-        ping.timer = 12.0f;
-        ping.pulseAnim = 0.0f;
+        ping.targetEnemyIdx = hitEnemy;
+        ping.worldPos = enemies[hitEnemy].pos;
+        ping.timer = 8.0f;
         return true;
     }
 
-    if (allies.empty()) return false;
+    float closestBlockDist = 75.0f;
+    Vector3 hitPoint = { 0.0f, 0.0f, 0.0f };
+    int hitBlockIdx = -1;
 
-    const WorldBlock& block = world[hitBlockIdx];
-    Vector3 coverSpot = { std::clamp(hitPoint.x, -22.0f, 22.0f), 0.0f, std::clamp(hitPoint.z, -22.0f, 22.0f) };
-
-    if (block.size.y >= 1.1f && block.size.x <= 18.0f && block.size.z <= 18.0f) {
-        Vector3 threatCenter = { 0.0f, 1.5f, -15.0f };
-        int aliveEnemies = 0;
-        Vector3 sumEnemies = { 0.0f, 0.0f, 0.0f };
-        for (const auto& e : enemies) {
-            if (e.IsAlive()) {
-                sumEnemies = Vector3Add(sumEnemies, e.pos);
-                aliveEnemies++;
-            }
+    grid.TraverseRayXZ(eyePos, forward, closestBlockDist, [&](int idx) -> bool {
+        RayCollision col = GetRayCollisionBox(ray, world[idx].GetAABB());
+        if (col.hit && col.distance > 0.4f && col.distance < closestBlockDist) {
+            closestBlockDist = col.distance;
+            hitPoint = col.point;
+            hitBlockIdx = idx;
         }
-        if (aliveEnemies > 0) {
-            threatCenter = Vector3Scale(sumEnemies, 1.0f / (float)aliveEnemies);
-        } else {
-            threatCenter = Vector3Add(block.pos, Vector3Scale(forward, 5.0f));
+        return true;
+    });
+
+    if (hitBlockIdx == -1 || allies.empty()) return false;
+
+    Vector3 targetCover = { hitPoint.x, 0.0f, hitPoint.z };
+    int nearNode = navGrid.FindNearestNode(hitPoint);
+    if (nearNode != -1) {
+        // Mantém a altura do andar pingado
+        targetCover.y = std::max(0.0f, hitPoint.y - 0.5f);
+    }
+
+    Vector3 threatRef = { 0.0f, 1.5f, -14.0f };
+    for (const auto& e : enemies) {
+        if (e.IsAlive()) {
+            threatRef = e.GetEyePos();
+            break;
         }
+    }
 
-        Vector3 awayDir = Vector3Subtract(block.pos, threatCenter);
-        awayDir.y = 0.0f;
-        if (Vector3Length(awayDir) < 0.01f) awayDir = Vector3Negate(forward);
-        awayDir.y = 0.0f;
-        awayDir = Vector3Normalize(awayDir);
-
-        float offsetX = (fabsf(awayDir.x) >= fabsf(awayDir.z))
-            ? ((awayDir.x >= 0.0f ? 1.0f : -1.0f) * (block.size.x * 0.5f + 0.90f))
-            : std::clamp(hitPoint.x - block.pos.x, -block.size.x * 0.35f, block.size.x * 0.35f);
-
-        float offsetZ = (fabsf(awayDir.z) > fabsf(awayDir.x))
-            ? ((awayDir.z >= 0.0f ? 1.0f : -1.0f) * (block.size.z * 0.5f + 0.90f))
-            : std::clamp(hitPoint.z - block.pos.z, -block.size.z * 0.35f, block.size.z * 0.35f);
-
-        coverSpot = {
-            std::clamp(block.pos.x + offsetX, -22.0f, 22.0f),
-            0.0f,
-            std::clamp(block.pos.z + offsetZ, -22.0f, 22.0f)
-        };
+    const WorldBlock& blk = world[hitBlockIdx];
+    if (!blk.IsSlope() && blk.size.y >= 0.85f && blk.size.x < 25.0f && blk.size.z < 25.0f) {
+        Vector3 bestSide = targetCover;
+        if (FindBestCoverPoint(targetCover, threatRef, world, bestSide) &&
+            Vector3Distance(targetCover, bestSide) < 4.5f) {
+            targetCover = bestSide;
+        }
     }
 
     int bestAllyIdx = -1;
-    float minDist = 99999.0f;
+    float bestAllyDist = 1e30f;
     for (size_t i = 0; i < allies.size(); i++) {
         if (allies[i].isDowned) continue;
-        float d = Vector3Distance(allies[i].pos, coverSpot);
-        if (d < minDist) {
-            minDist = d;
-            bestAllyIdx = (int)i;
+        float d = Vector3Distance(allies[i].pos, targetCover);
+        if (d < bestAllyDist) {
+            bestAllyDist = d;
+            bestAllyIdx = static_cast<int>(i);
         }
     }
 
     if (bestAllyIdx == -1) return false;
 
-    allies[bestAllyIdx].anchorPos = coverSpot;
-    allies[bestAllyIdx].coverPos = coverSpot;
+    for (auto& a : allies) a.hasPingOrder = false;
     allies[bestAllyIdx].hasPingOrder = true;
+    allies[bestAllyIdx].pingTargetPos = targetCover;
+    allies[bestAllyIdx].anchorPos = targetCover;
+    allies[bestAllyIdx].navRepathTimer = 0.0f;
 
     ping.type = PingType::MOVE_COVER;
-    ping.worldPos = coverSpot;
+    ping.worldPos = targetCover;
     ping.assignedAllyId = allies[bestAllyIdx].id;
     ping.targetEnemyIdx = -1;
-    ping.timer = 12.0f;
-    ping.pulseAnim = 0.0f;
+    ping.timer = 10.0f;
     return true;
 }
 
-inline void DrawTacticalPing3D(const TacticalPing& ping, const std::vector<SquadAlly>& allies, const std::vector<EnemyBot>& enemies) {
-    if (ping.type == PingType::NONE) return;
+inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies,
+                         std::vector<EnemyBot>& enemies, SourcePlayer& player,
+                         SquadOrder order, const std::vector<WorldBlock>& world,
+                         std::vector<Tracer>& tracers, TacticalPing& ping) {
+    const SpatialHashGrid& grid = GetWorldSpatialGrid(world);
+    const NavGrid& navGrid = GetWorldNavGrid(world);
 
-    float pulse = 0.55f + sinf(ping.pulseAnim * 6.0f) * 0.20f;
-
-    if (ping.type == PingType::MOVE_COVER) {
-        Vector3 p = ping.worldPos;
-        DrawCircle3D({ p.x, 0.05f, p.z }, pulse, { 1.0f, 0.0f, 0.0f }, 90.0f, SKYBLUE);
-        DrawCircle3D({ p.x, 0.06f, p.z }, 0.25f, { 1.0f, 0.0f, 0.0f }, 90.0f, WHITE);
-        DrawLine3D({ p.x, 0.05f, p.z }, { p.x, 1.85f, p.z }, Fade(SKYBLUE, 0.85f));
-        DrawSphere({ p.x, 1.90f, p.z }, 0.12f, SKYBLUE);
-
-        for (const auto& ally : allies) {
-            if (ally.id == ping.assignedAllyId && !ally.isDowned) {
-                DrawLine3D({ ally.pos.x, 0.15f, ally.pos.z }, { p.x, 0.15f, p.z }, Fade(SKYBLUE, 0.45f));
-                break;
-            }
-        }
-    } else if (ping.type == PingType::FOCUS_TARGET) {
-        if (ping.targetEnemyIdx >= 0 && ping.targetEnemyIdx < (int)enemies.size() && enemies[ping.targetEnemyIdx].IsAlive()) {
-            Vector3 ep = enemies[ping.targetEnemyIdx].pos;
-            DrawCircle3D({ ep.x, 0.06f, ep.z }, pulse + 0.25f, { 1.0f, 0.0f, 0.0f }, 90.0f, RED);
-            DrawSphere({ ep.x, ep.y + 2.45f + sinf(ping.pulseAnim * 5.0f) * 0.12f, ep.z }, 0.15f, YELLOW);
-        }
-    }
-}
-
-inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<EnemyBot>& enemies,
-                         SourcePlayer& player, SquadOrder currentOrder,
-                         const std::vector<WorldBlock>& world, std::vector<Tracer>& tracers,
-                         TacticalPing& ping) {
-    if (ping.type != PingType::NONE) {
+    if (ping.timer > 0.0f) {
         ping.timer -= dt;
-        ping.pulseAnim += dt;
-
         if (ping.timer <= 0.0f) {
-            for (auto& a : allies) a.hasPingOrder = false;
             ping.Clear();
+            for (auto& a : allies) a.hasPingOrder = false;
         } else if (ping.type == PingType::FOCUS_TARGET) {
-            if (ping.targetEnemyIdx < 0 || ping.targetEnemyIdx >= (int)enemies.size() || !enemies[ping.targetEnemyIdx].IsAlive()) {
+            if (ping.targetEnemyIdx < 0 || ping.targetEnemyIdx >= static_cast<int>(enemies.size()) ||
+                !enemies[ping.targetEnemyIdx].IsAlive()) {
                 ping.Clear();
             } else {
                 ping.worldPos = enemies[ping.targetEnemyIdx].pos;
             }
-        } else if (ping.type == PingType::MOVE_COVER) {
-            bool allyValid = false;
-            for (const auto& a : allies) {
-                if (a.id == ping.assignedAllyId && !a.isDowned && a.hasPingOrder) {
-                    allyValid = true;
-                    break;
-                }
-            }
-            if (!allyValid) ping.Clear();
         }
     }
 
-    int playerRescuerIdx = -1;
+    int rescuerIdx = -1;
     if (player.isDowned) {
-        float bestDist = 99999.0f;
+        float minD = 1e30f;
         for (size_t i = 0; i < allies.size(); i++) {
-            if (allies[i].isDowned || allies[i].isSuppressed) continue;
+            if (allies[i].isDowned) continue;
             float d = Vector3Distance(allies[i].pos, player.pos);
-            if (d < bestDist) {
-                bestDist = d;
-                playerRescuerIdx = (int)i;
+            if (d < minD) {
+                minD = d;
+                rescuerIdx = static_cast<int>(i);
             }
         }
     }
@@ -453,45 +494,39 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
 
         if (ally.isDowned) {
             ally.aggro = 0.0f;
+            ally.suppression = 0.0f;
             ally.isSuppressed = false;
-            ally.hasPingOrder = false;
-            ally.bleedoutTimer -= dt;
-            if (ally.bleedoutTimer <= 0.0f) {
-                ally.isDowned = false;
-                ally.hp = 80.0f;
-                ally.lastHp = 80.0f;
-                ally.bleedoutTimer = 25.0f;
-                ally.pos = { -5.0f + (float)i * 5.0f, 0.0f, 12.0f };
-                ally.anchorPos = ally.pos;
-            }
+            ally.bleedoutTimer = std::max(0.0f, ally.bleedoutTimer - dt);
             continue;
         }
 
         if (ally.hp < ally.lastHp) {
-            float dmgTaken = ally.lastHp - ally.hp;
-            ally.suppression = std::min(100.0f, ally.suppression + dmgTaken * 1.6f);
-            ally.lastHp = ally.hp;
+            ally.suppression = std::min(100.0f, ally.suppression + (ally.lastHp - ally.hp) * 2.2f);
         }
-
-        if (ally.hp <= 0.0f) {
-            ally.hp = 0.0f;
-            ally.isDowned = true;
-            ally.bleedoutTimer = 25.0f;
-            ally.reviveProgress = 0.0f;
-            ally.hasPingOrder = false;
-            continue;
-        }
-
+        ally.lastHp = ally.hp;
         ally.suppression = std::max(0.0f, ally.suppression - 16.0f * dt);
-        ally.isSuppressed = (ally.suppression >= 65.0f);
-        ally.aggro = std::max(0.0f, ally.aggro - 7.5f * dt);
 
-        if (player.isDowned && (int)i == playerRescuerIdx) {
-            float dPlayer = Vector3Distance(ally.pos, player.pos);
-            if (dPlayer > 1.7f) {
-                MoveAllyWithCollision(ally, player.pos, 5.6f, dt, world);
+        if (!ally.isSuppressed && ally.suppression >= 45.0f) {
+            ally.isSuppressed = true;
+            ally.coverSearchTimer = 0.0f;
+        } else if (ally.isSuppressed && ally.suppression < 20.0f) {
+            ally.isSuppressed = false;
+            ally.hasCoverPos = false;
+        }
+
+        float aggroFloor = (order == SquadOrder::SUPPRESS) ? 65.0f : 12.0f;
+        ally.aggro = std::max(aggroFloor, ally.aggro - 7.5f * dt);
+        ally.strafePhase += dt * 1.9f;
+
+        // Resgate do jogador usando A* (contorna paredes e corredores até o jogador caído)
+        if (static_cast<int>(i) == rescuerIdx && player.isDowned) {
+            float dToPlayer = Vector3Distance(ally.pos, player.pos);
+            if (dToPlayer > 1.75f) {
+                NavigateAgentTo(ally.pos, 0.38f, 1.80f, player.pos, 5.4f, dt,
+                                ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
+                                world, grid, navGrid);
             } else {
-                player.reviveProgress += dt * 0.45f;
+                player.reviveProgress += dt * 0.40f;
                 if (player.reviveProgress >= 1.0f) {
                     player.isDowned = false;
                     player.hp = 75.0f;
@@ -501,168 +536,208 @@ inline void UpdateAllies(float dt, std::vector<SquadAlly>& allies, std::vector<E
             continue;
         }
 
+        // Busca cobertura usando A* para contornar corredores em L
+        if (ally.isSuppressed) {
+            ally.coverSearchTimer -= dt;
+            if (!ally.hasCoverPos || ally.coverSearchTimer <= 0.0f) {
+                ally.coverSearchTimer = 1.4f;
+                Vector3 threat = { 0.0f, 1.5f, -14.0f };
+                for (const auto& e : enemies) {
+                    if (e.IsAlive()) {
+                        threat = e.GetEyePos();
+                        break;
+                    }
+                }
+                ally.hasCoverPos = FindBestCoverPoint(ally.pos, threat, world, ally.coverPos);
+            }
+            if (ally.hasCoverPos) {
+                NavigateAgentTo(ally.pos, 0.38f, 1.25f, ally.coverPos, 4.4f, dt,
+                                ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
+                                world, grid, navGrid);
+            }
+            continue;
+        }
+
+        // Movimentação tática guiada por NavGrid A*
+        if (ally.hasPingOrder) {
+            NavigateAgentTo(ally.pos, 0.38f, 1.80f, ally.pingTargetPos, 5.2f, dt,
+                            ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
+                            world, grid, navGrid);
+        } else if (order == SquadOrder::ADVANCE) {
+            Vector3 advanceTarget = { ally.spawnPos.x, ally.pos.y, -9.5f };
+            NavigateAgentTo(ally.pos, 0.38f, 1.80f, advanceTarget, 5.5f, dt,
+                            ally.navPath, ally.navWaypointIdx, ally.navRepathTimer, ally.navGoalPos,
+                            world, grid, navGrid);
+        } else {
+            Vector3 strafeTarget = {
+                ally.anchorPos.x + std::sin(ally.strafePhase) * 1.15f,
+                ally.anchorPos.y,
+                ally.anchorPos.z
+            };
+            MoveCharacterWithCollision(ally.pos, 0.38f, 1.80f, strafeTarget, 3.2f, dt, world, grid);
+        }
+
         int targetIdx = -1;
-        if (ping.type == PingType::FOCUS_TARGET &&
-            ping.targetEnemyIdx >= 0 && ping.targetEnemyIdx < (int)enemies.size() &&
-            enemies[ping.targetEnemyIdx].IsAlive()) {
+        if (ping.type == PingType::FOCUS_TARGET && ping.targetEnemyIdx >= 0 &&
+            ping.targetEnemyIdx < static_cast<int>(enemies.size()) &&
+            enemies[ping.targetEnemyIdx].IsAlive() &&
+            HasLineOfSight(ally.GetEyePos(), enemies[ping.targetEnemyIdx].GetEyePos(), world, grid)) {
             targetIdx = ping.targetEnemyIdx;
         } else {
-            float bestEnemyDist = 99999.0f;
+            float bestDist = 55.0f;
             for (size_t e = 0; e < enemies.size(); e++) {
                 if (!enemies[e].IsAlive()) continue;
                 float d = Vector3Distance(ally.pos, enemies[e].pos);
-                bool los = HasLineOfSight(ally.GetEyePos(), enemies[e].GetEyePos(), world);
-                float score = d - (los ? 8.0f : 0.0f);
-                if (score < bestEnemyDist) {
-                    bestEnemyDist = score;
-                    targetIdx = (int)e;
+                if (d < bestDist && HasLineOfSight(ally.GetEyePos(), enemies[e].GetEyePos(), world, grid)) {
+                    bestDist = d;
+                    targetIdx = static_cast<int>(e);
                 }
             }
         }
 
-        if (ally.isSuppressed) {
-            ally.coverSearchTimer -= dt;
-            if (ally.coverSearchTimer <= 0.0f) {
-                Vector3 threat = (targetIdx != -1) ? enemies[targetIdx].pos : Vector3{ 0.0f, 0.0f, -15.0f };
-                ally.coverPos = FindProtectedCoverPos(ally.pos, threat, world);
-                ally.coverSearchTimer = 1.2f;
+        ally.shootCooldown -= dt;
+        if (targetIdx != -1 && ally.shootCooldown <= 0.0f) {
+            EnemyBot& target = enemies[targetIdx];
+            bool suppressMode = (order == SquadOrder::SUPPRESS);
+            ally.shootCooldown = suppressMode
+                ? (0.24f + static_cast<float>(GetRandomValue(0, 22)) * 0.01f)
+                : (0.48f + static_cast<float>(GetRandomValue(0, 35)) * 0.01f);
+
+            float dmg = suppressMode ? 14.0f : 19.0f;
+            float suppAdd = suppressMode ? 24.0f : 12.0f;
+            target.hp -= dmg;
+            target.suppression = std::min(100.0f, target.suppression + suppAdd);
+
+            ally.aggro = std::min(100.0f, ally.aggro + (suppressMode ? 26.0f : 14.0f));
+            tracers.push_back({ ally.GetEyePos(), target.GetEyePos(), ally.color, 0.09f });
+        }
+    }
+}
+
+inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies,
+                          SourcePlayer& player, std::vector<SquadAlly>& allies,
+                          const std::vector<WorldBlock>& world,
+                          std::vector<Tracer>& tracers,
+                          std::vector<DamageIndicator>& damageIndicators) {
+    const SpatialHashGrid& grid = GetWorldSpatialGrid(world);
+    const NavGrid& navGrid = GetWorldNavGrid(world);
+
+    for (auto& enemy : enemies) {
+        if (!enemy.IsAlive()) continue;
+
+        if (enemy.lastHp < 0.0f) enemy.lastHp = enemy.hp;
+        if (enemy.hp < enemy.lastHp) {
+            enemy.suppression = std::min(100.0f, enemy.suppression + (enemy.lastHp - enemy.hp) * 1.9f);
+        }
+        enemy.lastHp = enemy.hp;
+        enemy.suppression = std::max(0.0f, enemy.suppression - 15.0f * dt);
+
+        if (!enemy.isSuppressed && enemy.suppression >= 45.0f) {
+            enemy.isSuppressed = true;
+            enemy.coverSearchTimer = 0.0f;
+        } else if (enemy.isSuppressed && enemy.suppression < 20.0f) {
+            enemy.isSuppressed = false;
+            enemy.hasCoverPos = false;
+        }
+
+        int bestTargetId = -1;
+        float bestThreat = -1.0f;
+        Vector3 bestThreatPos = player.GetEyePosition();
+        Vector3 bestTargetFeet = player.pos;
+
+        if (!player.isDowned) {
+            bool los = HasLineOfSight(enemy.GetEyePos(), player.GetEyePosition(), world, grid);
+            float threat = (player.aggro + 10.0f) * (los ? 1.0f : 0.4f);
+            if (threat > bestThreat) {
+                bestThreat = threat;
+                bestTargetId = 0;
+                bestThreatPos = player.GetEyePosition();
+                bestTargetFeet = player.pos;
             }
-            MoveAllyWithCollision(ally, ally.coverPos, 4.8f, dt, world);
-        } else if (ally.hasPingOrder) {
-            MoveAllyWithCollision(ally, ally.anchorPos, 6.2f, dt, world);
-        } else if (currentOrder == SquadOrder::ADVANCE && targetIdx != -1) {
-            Vector3 toEnemy = Vector3Subtract(enemies[targetIdx].pos, ally.pos);
-            toEnemy.y = 0.0f;
-            float dist = Vector3Length(toEnemy);
-            if (dist > 7.5f) {
-                MoveAllyWithCollision(ally, enemies[targetIdx].pos, 4.6f, dt, world);
+        }
+
+        for (size_t i = 0; i < allies.size(); i++) {
+            if (allies[i].isDowned) continue;
+            bool los = HasLineOfSight(enemy.GetEyePos(), allies[i].GetEyePos(), world, grid);
+            float threat = (allies[i].aggro + 10.0f) * (los ? 1.0f : 0.4f);
+            if (threat > bestThreat) {
+                bestThreat = threat;
+                bestTargetId = static_cast<int>(i) + 1;
+                bestThreatPos = allies[i].GetEyePos();
+                bestTargetFeet = allies[i].pos;
             }
-        } else if (currentOrder == SquadOrder::HOLD || currentOrder == SquadOrder::SUPPRESS) {
-            if (ping.type == PingType::FOCUS_TARGET && targetIdx != -1 &&
-                !HasLineOfSight(ally.GetEyePos(), enemies[targetIdx].GetEyePos(), world)) {
-                MoveAllyWithCollision(ally, enemies[targetIdx].pos, 3.8f, dt, world);
+        }
+
+        enemy.currentTargetId = bestTargetId;
+
+        if (enemy.isSuppressed) {
+            enemy.coverSearchTimer -= dt;
+            if (!enemy.hasCoverPos || enemy.coverSearchTimer <= 0.0f) {
+                enemy.coverSearchTimer = 1.4f;
+                enemy.hasCoverPos = FindBestCoverPoint(enemy.pos, bestThreatPos, world, enemy.coverPos);
+            }
+            if (enemy.hasCoverPos) {
+                NavigateAgentTo(enemy.pos, 0.38f, 1.25f, enemy.coverPos, 4.3f, dt,
+                                enemy.navPath, enemy.navWaypointIdx, enemy.navRepathTimer, enemy.navGoalPos,
+                                world, grid, navGrid);
+            }
+            continue;
+        }
+
+        if (bestTargetId == -1) continue;
+
+        Vector3 targetAim = (bestTargetId == 0)
+            ? player.GetEyePosition()
+            : allies[bestTargetId - 1].GetEyePos();
+
+        bool hasLos = HasLineOfSight(enemy.GetEyePos(), targetAim, world, grid);
+        if (!hasLos) {
+            // Usa A* para flanquear e contornar salas fechadas ou múltiplos andares até obter linha de visão
+            NavigateAgentTo(enemy.pos, 0.38f, 1.80f, bestTargetFeet, 3.4f, dt,
+                            enemy.navPath, enemy.navWaypointIdx, enemy.navRepathTimer, enemy.navGoalPos,
+                            world, grid, navGrid);
+            continue;
+        }
+
+        enemy.shootTimer -= dt;
+        if (enemy.shootTimer <= 0.0f) {
+            enemy.shootTimer = 0.65f + static_cast<float>(GetRandomValue(0, 45)) * 0.01f;
+            tracers.push_back({ enemy.GetEyePos(), targetAim, RED, 0.10f });
+
+            if (bestTargetId == 0) {
+                player.hp -= 10.0f;
+                damageIndicators.push_back({ enemy.pos, 0.65f });
+                if (player.hp <= 0.0f) {
+                    player.hp = 0.0f;
+                    player.isDowned = true;
+                    player.draggingAllyId = -1;
+                }
             } else {
-                MoveAllyWithCollision(ally, ally.anchorPos, 4.2f, dt, world);
-            }
-        }
-
-        ally.fireTimer -= dt;
-        if (!ally.isSuppressed && targetIdx != -1 && ally.fireTimer <= 0.0f) {
-            Vector3 from = ally.GetEyePos();
-            Vector3 to = enemies[targetIdx].GetEyePos();
-
-            if (HasLineOfSight(from, to, world)) {
-                bool suppressMode = (currentOrder == SquadOrder::SUPPRESS);
-                ally.fireTimer = suppressMode ? (0.28f + (float)GetRandomValue(0, 12) / 100.0f)
-                                              : (0.55f + (float)GetRandomValue(0, 25) / 100.0f);
-
-                Vector3 aimOffset = {
-                    (float)GetRandomValue(-18, 18) / 100.0f,
-                    (float)GetRandomValue(-15, 15) / 100.0f,
-                    (float)GetRandomValue(-18, 18) / 100.0f
-                };
-                Vector3 endHit = Vector3Add(to, aimOffset);
-                tracers.push_back({ from, endHit, ally.color, 0.08f });
-
-                float hitChance = suppressMode ? 0.55f : 0.72f;
-                if ((float)GetRandomValue(1, 100) / 100.0f <= hitChance) {
-                    float dmg = suppressMode ? 11.0f : 16.0f;
-                    enemies[targetIdx].hp -= dmg;
-                    enemies[targetIdx].suppression = std::min(100.0f, enemies[targetIdx].suppression + (suppressMode ? 24.0f : 12.0f));
+                SquadAlly& targetAlly = allies[bestTargetId - 1];
+                targetAlly.hp -= 13.0f;
+                if (targetAlly.hp <= 0.0f) {
+                    targetAlly.hp = 0.0f;
+                    targetAlly.isDowned = true;
+                    targetAlly.bleedoutTimer = 25.0f;
                 }
-
-                ally.aggro = std::min(100.0f, ally.aggro + (suppressMode ? 14.0f : 7.0f));
             }
         }
     }
 }
 
-inline void UpdateEnemies(float dt, std::vector<EnemyBot>& enemies, SourcePlayer& player,
-                          std::vector<SquadAlly>& allies, const std::vector<WorldBlock>& world,
-                          std::vector<Tracer>& tracers, std::vector<DamageIndicator>& damageIndicators) {
-    for (auto& enemy : enemies) {
-        if (!enemy.IsAlive()) continue;
+inline void DrawTacticalPing3D(const TacticalPing& ping,
+                               const std::vector<SquadAlly>& allies,
+                               const std::vector<EnemyBot>& enemies) {
+    (void)allies;
+    if (ping.type == PingType::NONE || ping.timer <= 0.0f) return;
 
-        enemy.suppression = std::max(0.0f, enemy.suppression - 14.0f * dt);
-        enemy.isSuppressed = (enemy.suppression >= 65.0f);
-
-        int chosenId = -1;
-        float highestThreat = -1.0f;
-
-        if (!player.isDowned) {
-            bool losPlayer = HasLineOfSight(enemy.GetEyePos(), player.GetEyePosition(), world);
-            float distPlayer = Vector3Distance(enemy.pos, player.pos);
-            float threat = player.aggro + (losPlayer ? 25.0f : -15.0f) - distPlayer * 0.6f;
-            if (threat > highestThreat) {
-                highestThreat = threat;
-                chosenId = 0;
-            }
-        }
-
-        for (const auto& ally : allies) {
-            if (ally.isDowned) continue;
-            bool losAlly = HasLineOfSight(enemy.GetEyePos(), ally.GetEyePos(), world);
-            float distAlly = Vector3Distance(enemy.pos, ally.pos);
-            float threat = ally.aggro + (losAlly ? 25.0f : -15.0f) - distAlly * 0.6f;
-            if (threat > highestThreat) {
-                highestThreat = threat;
-                chosenId = ally.id;
-            }
-        }
-
-        enemy.currentTargetId = chosenId;
-
-        Vector3 targetPos = { 0.0f, 0.0f, 8.0f };
-        Vector3 targetEye = { 0.0f, 1.5f, 8.0f };
-        if (chosenId == 0) {
-            targetPos = player.pos;
-            targetEye = player.GetEyePosition();
-        } else if (chosenId > 0) {
-            targetPos = allies[chosenId - 1].pos;
-            targetEye = allies[chosenId - 1].GetEyePos();
-        }
-
-        if (enemy.isSuppressed) {
-            enemy.coverSearchTimer -= dt;
-            if (enemy.coverSearchTimer <= 0.0f) {
-                enemy.coverPos = FindProtectedCoverPos(enemy.pos, targetPos, world);
-                enemy.coverSearchTimer = 1.1f;
-            }
-            MoveEnemyWithCollision(enemy, enemy.coverPos, 4.5f, dt, world);
-        } else if (chosenId != -1) {
-            float dist = Vector3Distance(enemy.pos, targetPos);
-            if (dist > 14.0f) {
-                MoveEnemyWithCollision(enemy, targetPos, 3.2f, dt, world);
-            }
-        }
-
-        enemy.fireTimer -= dt;
-        if (!enemy.isSuppressed && chosenId != -1 && enemy.fireTimer <= 0.0f) {
-            Vector3 from = enemy.GetEyePos();
-            if (HasLineOfSight(from, targetEye, world)) {
-                enemy.fireTimer = 0.75f + (float)GetRandomValue(0, 35) / 100.0f;
-
-                Vector3 spread = {
-                    (float)GetRandomValue(-26, 26) / 100.0f,
-                    (float)GetRandomValue(-20, 20) / 100.0f,
-                    (float)GetRandomValue(-26, 26) / 100.0f
-                };
-                tracers.push_back({ from, Vector3Add(targetEye, spread), RED, 0.09f });
-
-                if ((float)GetRandomValue(1, 100) / 100.0f <= 0.58f) {
-                    if (chosenId == 0 && !player.isDowned) {
-                        player.hp -= 12.0f;
-                        damageIndicators.push_back({ enemy.pos, 0.65f });
-                        if (player.hp <= 0.0f) {
-                            player.hp = 0.0f;
-                            player.isDowned = true;
-                            player.reviveProgress = 0.0f;
-                        }
-                    } else if (chosenId > 0) {
-                        allies[chosenId - 1].hp -= 13.0f;
-                    }
-                }
-            }
-        }
+    if (ping.type == PingType::MOVE_COVER) {
+        DrawCylinderWires(ping.worldPos, 0.35f, 0.35f, 2.0f, 8, SKYBLUE);
+        DrawCircle3D({ ping.worldPos.x, ping.worldPos.y + 0.04f, ping.worldPos.z }, 0.65f, { 1.0f, 0.0f, 0.0f }, 90.0f, SKYBLUE);
+    } else if (ping.type == PingType::FOCUS_TARGET &&
+               ping.targetEnemyIdx >= 0 && ping.targetEnemyIdx < static_cast<int>(enemies.size()) &&
+               enemies[ping.targetEnemyIdx].IsAlive()) {
+        Vector3 ePos = enemies[ping.targetEnemyIdx].pos;
+        DrawCircle3D({ ePos.x, ePos.y + 0.05f, ePos.z }, 0.85f, { 1.0f, 0.0f, 0.0f }, 90.0f, YELLOW);
     }
 }

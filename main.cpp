@@ -72,7 +72,7 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Blender .glb & Animacoes (SAVEPOINT_15)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Audio Espacial 3D & Trilha Dinamica (SAVEPOINT_16)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -104,6 +104,8 @@ int main() {
     float orderBannerTimer = 0.0f;
     float animTime = 0.0f;
     float reloadAssetsBannerTimer = 0.0f;
+    float playerStepTimer = 0.0f;
+    float botStepTimer = 0.0f;
 
     Camera3D camera = {};
     camera.up = { 0.0f, 1.0f, 0.0f };
@@ -120,9 +122,10 @@ int main() {
             audio.ToggleMute();
         }
 
-        // Hot-Reload de modelos .glb exportados do Blender (F7)
+        // Hot-Reload de modelos (.glb) e sons externos (.ogg / .wav) com F7
         if (IsKeyPressed(KEY_F7)) {
             assets.ReloadAll();
+            audio.ReloadExternalAssets();
             reloadAssetsBannerTimer = 2.6f;
             audio.PlayOrder();
         }
@@ -132,6 +135,8 @@ int main() {
         // =====================================================================
         if (currentMode == GameMode::MAIN_MENU) {
             if (IsCursorHidden()) EnableCursor();
+
+            audio.UpdateDynamicMusic(dt, 0.0f, false);
 
             if (IsKeyPressed(KEY_ESCAPE)) {
                 shouldQuit = true;
@@ -156,8 +161,10 @@ int main() {
 
             BeginDrawing();
                 menu.Draw(largura, altura);
-                const char* audioTag = audio.muted ? "[M] Som: MUDO" : "[M] Som: PROCEDURAL ATIVO";
-                DrawText(audioTag, 24, 24, 16, audio.muted ? RED : GREEN);
+                const char* audioTag = audio.muted
+                    ? "[M] Som: MUDO"
+                    : TextFormat("[M] Audio 3D: ON (%d SFX / %d Musicas .ogg/.wav)", audio.externalSfxCount, audio.externalMusicCount);
+                DrawText(audioTag, 24, 24, 15, audio.muted ? RED : GREEN);
 
                 const char* assetTag = TextFormat("[F7] Modelos Blender (.glb): %d / %d carregados", assets.loadedCount, assets.totalSlots);
                 DrawText(assetTag, 24, 48, 15, (assets.loadedCount > 0) ? SKYBLUE : LIGHTGRAY);
@@ -169,6 +176,8 @@ int main() {
         // ESTADO 2: EDITOR DE MAPAS IN-GAME
         // =====================================================================
         if (currentMode == GameMode::MAP_EDITOR) {
+            audio.UpdateDynamicMusic(dt, 0.0f, false);
+
             if (IsKeyPressed(KEY_ESCAPE)) {
                 currentMode = GameMode::MAIN_MENU;
                 EnableCursor();
@@ -275,6 +284,24 @@ int main() {
             float targetFov = (horizSpeed > 7.5f) ? 83.0f : 75.0f;
             camera.fovy += (targetFov - camera.fovy) * std::min(10.0f * dt, 1.0f);
 
+            // Atualiza posição e orientação do ouvinte 3D
+            Vector3 eyePos = player.GetEyePosition();
+            Vector3 forward = player.GetForward3D();
+            Vector3 listenerRight = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
+            audio.UpdateListener(eyePos, forward, listenerRight);
+
+            // Passos do jogador no solo
+            if (player.isGrounded && horizSpeed > 1.8f && !player.isDowned) {
+                float stepRate = player.isSprinting ? 0.30f : (player.isCrouched ? 0.55f : 0.40f);
+                playerStepTimer += dt;
+                if (playerStepTimer >= stepRate) {
+                    playerStepTimer = 0.0f;
+                    audio.Play2D(SfxId::FOOTSTEP, player.isCrouched ? 0.14f : 0.28f, 0.95f + (float)GetRandomValue(0, 10) * 0.01f);
+                }
+            } else {
+                playerStepTimer = 0.25f;
+            }
+
             for (auto& ally : allies) {
                 ally.isBeingDragged = false;
             }
@@ -332,8 +359,6 @@ int main() {
             mission.Update(dt, player, weapon, allies, enemies, (nearbyDownedIdx != -1), audio);
             weapon.Update(dt, mouseDelta, horizSpeed, player.isGrounded);
 
-            Vector3 eyePos = player.GetEyePosition();
-            Vector3 forward = player.GetForward3D();
             camera.position = eyePos;
             camera.target = Vector3Add(eyePos, forward);
 
@@ -373,8 +398,7 @@ int main() {
                         throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
                         grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
                     } else {
-                        Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
-                        Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(right, 0.24f), { 0, -0.18f, 0 }));
+                        Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(listenerRight, 0.24f), { 0, -0.18f, 0 }));
 
                         bool anyHit = false;
                         bool anyHeadshot = false;
@@ -470,7 +494,7 @@ int main() {
 
             for (size_t e = prevExplosions; e < explosions.size(); e++) {
                 const ExplosionEffect exp = explosions[e];
-                audio.PlayExplosion(exp.isFlashbang);
+                audio.PlayExplosion3D(exp.pos, exp.isFlashbang);
                 mission.CheckExplosionChain(exp, explosions);
 
                 bool nadeHit = false;
@@ -540,9 +564,31 @@ int main() {
                 prevAllyDowned[i] = allies[i].isDowned;
             }
 
+            // Registra quantidade de tracers antes da IA agir para espacializar os tiros em 3D
+            size_t prevTracers = tracers.size();
+
             if (!allies.empty() || !enemies.empty()) {
                 UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
                 UpdateEnemies(dt, enemies, player, allies, world, tracers, damageIndicators);
+            }
+
+            // Áudio espacial 3D para cada disparo efetuado por aliados ou inimigos
+            for (size_t t = prevTracers; t < tracers.size(); t++) {
+                bool isEnemyShot = (tracers[t].color.r > 180 && tracers[t].color.b < 80);
+                SfxId shotSfx = isEnemyShot ? SfxId::RIFLE : SfxId::LMG;
+                float pitch = isEnemyShot ? 0.93f : 1.07f;
+                audio.Play3D(shotSfx, tracers[t].start, 0.68f, pitch, 48.0f);
+            }
+
+            // Passos espaciais 3D dos aliados em deslocamento
+            botStepTimer += dt;
+            if (botStepTimer >= 0.45f) {
+                botStepTimer = 0.0f;
+                for (const auto& ally : allies) {
+                    if (!ally.isDowned && Vector3Distance(ally.pos, ally.anchorPos) > 0.65f) {
+                        audio.PlayFootstep3D(ally.pos, 0.32f);
+                    }
+                }
             }
 
             if (!prevPlayerDowned && player.isDowned) {
@@ -565,17 +611,29 @@ int main() {
             }
         }
 
-        // =====================================================================
-        // RENDERIZAÇÃO 3D (MODELOS .GLB COM FALLBACK AUTOMÁTICO PARA CUBOS)
-        // =====================================================================
-        Vector3 eyePos = player.GetEyePosition();
-        Vector3 forward = player.GetForward3D();
-        float horizSpeed = sqrtf(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
-
+        // Atualiza Trilha Sonora Dinâmica com base no Aggro do esquadrão e inimigos ativos
         float maxAllyAggro = 0.0f;
         for (const auto& ally : allies) {
             if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
         }
+        float rawTension = 0.0f;
+        if (currentMode != GameMode::MOVEMENT_TEST && !missionEnded) {
+            float peakAggro = std::max(player.aggro, maxAllyAggro) / 100.0f;
+            int activeHostiles = 0;
+            for (const auto& e : enemies) {
+                if (e.IsAlive() && e.currentTargetId != -1) activeHostiles++;
+            }
+            float hostileFactor = std::min(1.0f, activeHostiles * 0.25f);
+            rawTension = std::clamp(std::max(peakAggro, hostileFactor * 0.70f), 0.0f, 1.0f);
+        }
+        audio.UpdateDynamicMusic(dt, rawTension, true);
+
+        // =====================================================================
+        // RENDERIZAÇÃO 3D
+        // =====================================================================
+        Vector3 eyePos = player.GetEyePosition();
+        Vector3 forward = player.GetForward3D();
+        float horizSpeed = sqrtf(player.vel.x * player.vel.x + player.vel.z * player.vel.z);
         bool isStealthFlank = (!allies.empty() && !player.isDowned && player.aggro < 25.0f && maxAllyAggro > 50.0f);
 
         BeginDrawing();
@@ -676,7 +734,7 @@ int main() {
             }
 
             if (reloadAssetsBannerTimer > 0.0f) {
-                const char* reloadMsg = TextFormat("ASSETS RECARREGADOS: %d / %d MODELOS .GLB ATIVOS", assets.loadedCount, assets.totalSlots);
+                const char* reloadMsg = TextFormat("ASSETS RECARREGADOS: %d .GLB  |  %d SFX .OGG/.WAV", assets.loadedCount, audio.externalSfxCount);
                 DrawText(reloadMsg, cx - MeasureText(reloadMsg, 17) / 2, 114, 17, SKYBLUE);
             }
 
@@ -691,7 +749,7 @@ int main() {
                 DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
 
                 DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
-                DrawText("1-5: Armas | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | F7: Reload .glb | ESC: Menu",
+                DrawText("1-5: Armas | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | F7: Reload Assets | ESC: Menu",
                          20, altura - 26, 14, LIGHTGRAY);
             } else {
                 if (tacticalPing.type == PingType::MOVE_COVER) {
@@ -826,10 +884,10 @@ int main() {
                 DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
                 DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
                 DrawText("[Scroll Click] Ping Contextual", cmdX, 110, 15, (tacticalPing.type != PingType::NONE) ? YELLOW : LIGHTGRAY);
-                DrawText(TextFormat("[M] Som: %s | [F7] .glb: %d/%d", audio.muted ? "MUDO" : "ON", assets.loadedCount, assets.totalSlots),
-                         cmdX, 134, 14, audio.muted ? RED : SKYBLUE);
+                DrawText(TextFormat("[M] Som: %s | Trilha: %.0f%%", audio.muted ? "MUDO" : "3D ON", audio.musicTension * 100.0f),
+                         cmdX, 134, 14, audio.muted ? RED : (audio.musicTension > 0.55f ? ORANGE : GREEN));
 
-                DrawText("1-5: Armas | Scroll: Ping | F1-F3: Ordens | E: Arrastar | F: Interagir | F5: Reiniciar | F7: Reload .glb | ESC: Menu",
+                DrawText("1-5: Armas | Scroll: Ping | F1-F3: Ordens | E: Arrastar | F: Interagir | F5: Reiniciar | F7: Reload Assets | ESC: Menu",
                          20, altura - 26, 13, LIGHTGRAY);
             }
 

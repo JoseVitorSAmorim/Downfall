@@ -120,26 +120,18 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `MapEditor.hpp`: Classe `InGameMapEditor` com câmera livre (*noclip*), grade magnética (`G`: `0.25m`–`2.00m`), modos `BUILD` e `EDIT` (`TAB`), colocação/remoção de blocos por raycast, redimensionamento (`J/L`, `U/O`, `I/K`), movimentação (`Setas` + `PgUp/PgDn`), duplicação (`V`), paleta de 8 cores (`1`–`8` e `P`), histórico de desfazer (`Z`) e exportação direta para `.txt` (`F5`) compatível com `LevelLoader`.
   - `Menu.hpp` & `main.cpp`: Nova opção `[4] EDITOR DE MAPAS IN-GAME` (`GameMode::MAP_EDITOR`).
 
-### [SAVEPOINT_15 — ATUAL] Suporte a Modelos 3D & Animações do Blender (`.glb`) (`AssetManager.hpp`, `Weapon.hpp`, `Objectives.hpp`, `main.cpp`, `Makefile`)
+### [SAVEPOINT_15] Suporte a Modelos 3D & Animações do Blender (`.glb`) (`AssetManager.hpp`, `Weapon.hpp`, `Objectives.hpp`, `main.cpp`, `Makefile`)
 - **Status:** Implementado e modularizado (`AssetManager.hpp`, `Weapon.hpp`, `Objectives.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `AssetManager.hpp`: Classe `AssetManager` com carregamento automático de modelos `.glb` e animações esqueléticas (`LoadModel`, `LoadModelAnimations`, `UpdateModelAnimation`) em `assets/models/` para personagens (`ally.glb`, `enemy.glb`), 8 armas/gadgets (`weapon_*.glb`) e objetos (`barrel.glb`, `crate.glb`, `terminal.glb`), com **fallback automático para os cubos procedurais** quando o arquivo `.glb` não existe.
   - **Hot-Reload (`F7`):** Recarrega os modelos `.glb` em tempo real sem fechar o jogo após exportar no Blender.
 
-[SAVEPOINT_16] Áudio Espacial 3D & Suporte a Arquivos Externos (.wav / .ogg)
-
-    Arquivos: Audio.hpp
-
-    O que resolve: Evoluir o sintetizador atual para suportar trilhas sonoras e efeitos gravados com direcionalidade 3D.
-
-    Mecânicas:
-
-        Carregamento Híbrido: Tenta carregar arquivos reais (assets/sfx/*.ogg e assets/music/*.ogg via LoadSound / LoadMusicStream); se não encontrar, usa os sons procedurais do SAVEPOINT_09.
-
-        Atenuação e Panning 3D: Calcula distância e produto escalar com o vetor direito da câmera (SetSoundVolume e SetSoundPan) para você ouvir de que lado vêm os tiros e passos.
-
-        Trilha Dinâmica: Música ambiente tranquila que alterna suavemente para percussão intensa quando o Aggro do esquadrão sobe.
-
+### [SAVEPOINT_16 — ATUAL] Áudio Espacial 3D & Arquivos Externos (`.ogg`/`.wav`) (`Audio.hpp`, `main.cpp`)
+- **Status:** Implementado e modularizado (`Audio.hpp`, `main.cpp`).
+- **Adicionado:**
+  - `Audio.hpp`: Carregamento híbrido em `assets/sfx/` e `assets/music/` via `LoadSound` / `LoadMusicStream` com fallback procedural PCM, pool de vozes (`LoadSoundAlias`) para tiros simultâneos, `Play3D` com atenuação quadrática por distância e *panning* estéreo via produto escalar com `listenerRight`, além de trilha dinâmica com *crossfade* contínuo entre ambiente e combate (`UpdateDynamicMusic`).
+  - `main.cpp`: Atualização do *listener* 3D, espacialização de disparos de aliados/inimigos, passos e explosões em 3D, e *hot-reload* unificado com `[F7]`.
+  
 [SAVEPOINT_17] Sistema de Cutscenes & Eventos Roteirizados (Cutscene.hpp)
 
     Arquivos: Cutscene.hpp (novo), World.hpp, main.cpp

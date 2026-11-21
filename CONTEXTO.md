@@ -114,25 +114,17 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
   - `Objectives.hpp`: Structs `ExplosiveBarrel` (detonação por tiro e reação em cadeia), `AmmoCrate` (reabastecimento de munição/granadas + cura de `25 HP` com tecla `F` e recarga de `12s`), `HackTerminal` (invasão segurando `F` que gera `Aggro`), `ExtractionZone` e classe `MissionManager`.
   - **Loop de Missão:** 3 etapas no modo Combate Tático (`HACK_TERMINALS` → `CLEAR_HOSTILES` com reforços inimigos → `EXTRACT_SQUAD`), tela modal de **Vitória / Derrota** com estatísticas (tempo, abates, headshots, terminais, barris) e modo `SANDBOX` livre no Estande de Tiro.
 
-### [SAVEPOINT_14 — ATUAL] Editor de Mapas In-Game (`MapEditor.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
+### [SAVEPOINT_14] Editor de Mapas In-Game (`MapEditor.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`)
 - **Status:** Implementado e modularizado (`MapEditor.hpp`, `Menu.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `MapEditor.hpp`: Classe `InGameMapEditor` com câmera livre (*noclip*), grade magnética (`G`: `0.25m`–`2.00m`), modos `BUILD` e `EDIT` (`TAB`), colocação/remoção de blocos por raycast, redimensionamento (`J/L`, `U/O`, `I/K`), movimentação (`Setas` + `PgUp/PgDn`), duplicação (`V`), paleta de 8 cores (`1`–`8` e `P`), histórico de desfazer (`Z`) e exportação direta para `.txt` (`F5`) compatível com `LevelLoader`.
   - `Menu.hpp` & `main.cpp`: Nova opção `[4] EDITOR DE MAPAS IN-GAME` (`GameMode::MAP_EDITOR`).
 
-[SAVEPOINT_15] Suporte a Modelos 3D do Blender & Animações Esqueléticas
-
-    Arquivos: AssetManager.hpp (novo), Weapon.hpp, SquadAI.hpp, main.cpp
-
-    O que resolve: Substituir os cubos coloridos por malhas texturizadas e animadas vindas do Blender.
-
-    Mecânicas:
-
-        Importação .glb / .iqm: Carregamento via LoadModel e LoadModelAnimations com máquina de estados de animação (Idle, Run, Crouch_Cover, Downed, Fire).
-
-        Acoplamento em Ossos (Bone Attachment): Fixar os modelos 3D das armas na mão direita dos personagens e viewmodels detalhados em primeira pessoa.
-
-        Fallback Automático: Se o arquivo .glb ainda não existir na pasta assets/, o jogo desenha os cubos atuais automaticamente sem travar.
+### [SAVEPOINT_15 — ATUAL] Suporte a Modelos 3D & Animações do Blender (`.glb`) (`AssetManager.hpp`, `Weapon.hpp`, `Objectives.hpp`, `main.cpp`, `Makefile`)
+- **Status:** Implementado e modularizado (`AssetManager.hpp`, `Weapon.hpp`, `Objectives.hpp`, `main.cpp`, `Makefile`).
+- **Adicionado:**
+  - `AssetManager.hpp`: Classe `AssetManager` com carregamento automático de modelos `.glb` e animações esqueléticas (`LoadModel`, `LoadModelAnimations`, `UpdateModelAnimation`) em `assets/models/` para personagens (`ally.glb`, `enemy.glb`), 8 armas/gadgets (`weapon_*.glb`) e objetos (`barrel.glb`, `crate.glb`, `terminal.glb`), com **fallback automático para os cubos procedurais** quando o arquivo `.glb` não existe.
+  - **Hot-Reload (`F7`):** Recarrega os modelos `.glb` em tempo real sem fechar o jogo após exportar no Blender.
 
 [SAVEPOINT_16] Áudio Espacial 3D & Suporte a Arquivos Externos (.wav / .ogg)
 

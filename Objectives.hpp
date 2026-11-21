@@ -7,16 +7,17 @@
 #include "Weapon.hpp"
 #include "SquadAI.hpp"
 #include "Audio.hpp"
+#include "AssetManager.hpp"
 #include <vector>
 #include <string>
 #include <algorithm>
 #include <cmath>
 
 enum class MissionState {
-    SANDBOX,      // Modos livres (Pista de Movimento e Estande de Tiro)
-    IN_PROGRESS,  // Missão tática em andamento
-    VICTORY,      // Objetivos concluídos e extração realizada
-    DEFEAT        // Esquadrão eliminado ou sangramento fatal
+    SANDBOX,
+    IN_PROGRESS,
+    VICTORY,
+    DEFEAT
 };
 
 enum class ObjectivePhase {
@@ -95,18 +96,15 @@ public:
         defeatReason = "";
 
         if (!isCampaignMission && !isCombatSandbox) {
-            // Pista de Movimento: sem objetos de combate
             state = MissionState::SANDBOX;
             return;
         }
 
-        // Caixas de suprimento próximas à linha inicial do esquadrão
         crates = {
             { { -7.5f, 0.0f,  9.5f }, 0.0f, 12.0f },
             { {  7.5f, 0.0f,  9.5f }, 0.0f, 12.0f }
         };
 
-        // Barris explosivos táticos próximos às coberturas inimigas e flancos
         barrels = {
             { { -3.2f, 0.0f, -13.5f }, 35.0f, false },
             { {  4.2f, 0.0f, -13.5f }, 35.0f, false },
@@ -131,7 +129,6 @@ public:
         }
     }
 
-    // Verifica se um disparo atingiu algum barril antes de uma parede/inimigo
     int CheckBarrelShot(Ray ray, float maxDist) {
         int hitIdx = -1;
         float closest = maxDist;
@@ -160,7 +157,6 @@ public:
         }
     }
 
-    // Reação em cadeia quando uma granada ou outro barril explode por perto
     void CheckExplosionChain(const ExplosionEffect& exp, std::vector<ExplosionEffect>& explosions) {
         if (exp.isFlashbang) return;
         for (size_t i = 0; i < barrels.size(); i++) {
@@ -191,11 +187,9 @@ public:
             stats.elapsedTime += dt;
         }
 
-        // Interação com Caixa de Suprimentos (tecla F quando não há aliado caído ao lado)
         if (!player.isDowned && !hasNearbyDownedAlly && IsKeyPressed(KEY_F)) {
             for (auto& crate : crates) {
                 if (crate.IsReady() && Vector3Distance(player.pos, crate.pos) <= 2.6f) {
-                    // Reabastece todas as armas e granadas
                     for (size_t w = 0; w < (size_t)WeaponId::COUNT; w++) {
                         WeaponId wid = (WeaponId)w;
                         const WeaponStats& st = GetWeaponStats(wid);
@@ -215,7 +209,6 @@ public:
 
         if (state != MissionState::IN_PROGRESS) return;
 
-        // Verifica condição de derrota (esquadrão inteiro caído ou sangramento do jogador)
         bool anyAllyStanding = false;
         for (const auto& a : allies) {
             if (!a.isDowned) {
@@ -242,13 +235,12 @@ public:
             playerDownedTimer = 0.0f;
         }
 
-        // Fase 1: Hackear Terminais (segurar F próximo ao terminal)
         if (phase == ObjectivePhase::HACK_TERMINALS) {
             if (!player.isDowned && !hasNearbyDownedAlly && IsKeyDown(KEY_F)) {
                 for (auto& term : terminals) {
                     if (term.isHacked) continue;
                     if (Vector3Distance(player.pos, term.pos) <= 2.7f) {
-                        term.progress += dt * 0.30f; // ~3.3s para concluir
+                        term.progress += dt * 0.30f;
                         player.aggro = std::min(100.0f, player.aggro + 14.0f * dt);
 
                         if (term.progress >= 1.0f) {
@@ -280,9 +272,7 @@ public:
                     audio.PlayOrder();
                 }
             }
-        }
-        // Fase 2: Eliminar todos os inimigos restantes
-        else if (phase == ObjectivePhase::CLEAR_HOSTILES) {
+        } else if (phase == ObjectivePhase::CLEAR_HOSTILES) {
             int aliveCount = 0;
             for (const auto& e : enemies) {
                 if (e.IsAlive()) aliveCount++;
@@ -292,9 +282,7 @@ public:
                 extraction.isActive = true;
                 audio.PlayRevive();
             }
-        }
-        // Fase 3: Extrair na Zona Verde
-        else if (phase == ObjectivePhase::EXTRACT_SQUAD) {
+        } else if (phase == ObjectivePhase::EXTRACT_SQUAD) {
             if (!player.isDowned && Vector3Distance(player.pos, extraction.pos) <= extraction.radius) {
                 state = MissionState::VICTORY;
                 audio.PlayRevive();
@@ -302,31 +290,43 @@ public:
         }
     }
 
-    void Draw3D() const {
-        // Barris Explosivos
+    void Draw3D(const AssetManager& assets) const {
+        // Barris Explosivos (.glb ou cubos)
         for (const auto& b : barrels) {
             if (b.exploded) continue;
-            DrawCube({ b.pos.x, b.pos.y + 0.625f, b.pos.z }, 0.78f, 1.25f, 0.78f, { 195, 42, 38, 255 });
-            DrawCubeWires({ b.pos.x, b.pos.y + 0.625f, b.pos.z }, 0.78f, 1.25f, 0.78f, BLACK);
-            // Faixa de alerta amarela no centro do barril
-            DrawCube({ b.pos.x, b.pos.y + 0.65f, b.pos.z }, 0.81f, 0.22f, 0.81f, GOLD);
+            if (assets.HasPropModel(PropAssetId::BARREL)) {
+                assets.DrawPropModel(PropAssetId::BARREL, b.pos, 0.0f, 1.0f, WHITE);
+            } else {
+                DrawCube({ b.pos.x, b.pos.y + 0.625f, b.pos.z }, 0.78f, 1.25f, 0.78f, { 195, 42, 38, 255 });
+                DrawCubeWires({ b.pos.x, b.pos.y + 0.625f, b.pos.z }, 0.78f, 1.25f, 0.78f, BLACK);
+                DrawCube({ b.pos.x, b.pos.y + 0.65f, b.pos.z }, 0.81f, 0.22f, 0.81f, GOLD);
+            }
         }
 
-        // Caixas de Suprimento
+        // Caixas de Suprimento (.glb ou cubos)
         for (const auto& c : crates) {
-            Color baseCol = c.IsReady() ? Color{ 58, 92, 58, 255 } : Color{ 65, 68, 72, 255 };
-            Color trimCol = c.IsReady() ? LIME : GRAY;
-            DrawCube({ c.pos.x, c.pos.y + 0.40f, c.pos.z }, 1.15f, 0.80f, 0.75f, baseCol);
-            DrawCubeWires({ c.pos.x, c.pos.y + 0.40f, c.pos.z }, 1.15f, 0.80f, 0.75f, BLACK);
-            DrawCube({ c.pos.x, c.pos.y + 0.82f, c.pos.z }, 0.65f, 0.06f, 0.35f, trimCol);
+            if (assets.HasPropModel(PropAssetId::CRATE)) {
+                Color tint = c.IsReady() ? WHITE : Fade(GRAY, 0.65f);
+                assets.DrawPropModel(PropAssetId::CRATE, c.pos, 0.0f, 1.0f, tint);
+            } else {
+                Color baseCol = c.IsReady() ? Color{ 58, 92, 58, 255 } : Color{ 65, 68, 72, 255 };
+                Color trimCol = c.IsReady() ? LIME : GRAY;
+                DrawCube({ c.pos.x, c.pos.y + 0.40f, c.pos.z }, 1.15f, 0.80f, 0.75f, baseCol);
+                DrawCubeWires({ c.pos.x, c.pos.y + 0.40f, c.pos.z }, 1.15f, 0.80f, 0.75f, BLACK);
+                DrawCube({ c.pos.x, c.pos.y + 0.82f, c.pos.z }, 0.65f, 0.06f, 0.35f, trimCol);
+            }
         }
 
-        // Terminais de Hack
+        // Terminais de Hack (.glb ou cubos)
         for (const auto& t : terminals) {
             Color screenCol = t.isHacked ? GREEN : SKYBLUE;
-            DrawCube({ t.pos.x, t.pos.y + 0.65f, t.pos.z }, 0.75f, 1.30f, 0.55f, { 35, 40, 48, 255 });
-            DrawCubeWires({ t.pos.x, t.pos.y + 0.65f, t.pos.z }, 0.75f, 1.30f, 0.55f, screenCol);
-            DrawCube({ t.pos.x, t.pos.y + 1.05f, t.pos.z + 0.28f }, 0.52f, 0.36f, 0.05f, screenCol);
+            if (assets.HasPropModel(PropAssetId::TERMINAL)) {
+                assets.DrawPropModel(PropAssetId::TERMINAL, t.pos, 0.0f, 1.0f, WHITE);
+            } else {
+                DrawCube({ t.pos.x, t.pos.y + 0.65f, t.pos.z }, 0.75f, 1.30f, 0.55f, { 35, 40, 48, 255 });
+                DrawCubeWires({ t.pos.x, t.pos.y + 0.65f, t.pos.z }, 0.75f, 1.30f, 0.55f, screenCol);
+                DrawCube({ t.pos.x, t.pos.y + 1.05f, t.pos.z + 0.28f }, 0.52f, 0.36f, 0.05f, screenCol);
+            }
 
             if (!t.isHacked) {
                 float ringR = 0.85f + sinf(pulseTimer * 4.0f) * 0.12f;
@@ -348,7 +348,6 @@ public:
         Vector3 eyePos = player.GetEyePosition();
         Vector3 forward = player.GetForward3D();
 
-        // Etiquetas 2D sobre Caixas de Suprimento e Terminais
         for (const auto& c : crates) {
             Vector3 top = { c.pos.x, c.pos.y + 1.25f, c.pos.z };
             if (Vector3DotProduct(forward, Vector3Subtract(top, eyePos)) <= 0.0f) continue;
@@ -400,7 +399,6 @@ public:
             }
         }
 
-        // Painel de Objetivo Atual (canto esquerdo abaixo da lista do esquadrão)
         if (state == MissionState::IN_PROGRESS) {
             int boxX = 20;
             int boxY = 152;
@@ -419,7 +417,6 @@ public:
             }
         }
 
-        // Tela de Vitória ou Derrota da Missão
         if (state == MissionState::VICTORY || state == MissionState::DEFEAT) {
             bool won = (state == MissionState::VICTORY);
             Color accent = won ? GREEN : RED;

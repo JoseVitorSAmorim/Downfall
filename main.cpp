@@ -6,6 +6,7 @@
 #include "Audio.hpp"
 #include "Objectives.hpp"
 #include "MapEditor.hpp"
+#include "AssetManager.hpp"
 
 struct HitmarkerFeedback {
     float timer = 0.0f;
@@ -71,12 +72,15 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Editor de Mapas In-Game (SAVEPOINT_14)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Blender .glb & Animacoes (SAVEPOINT_15)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
     ProceduralAudio audio;
     audio.Init();
+
+    AssetManager assets;
+    assets.Init();
 
     MainMenu menu;
     InGameMapEditor mapEditor;
@@ -98,6 +102,8 @@ int main() {
     HitmarkerFeedback hitmarker;
     MissionManager mission;
     float orderBannerTimer = 0.0f;
+    float animTime = 0.0f;
+    float reloadAssetsBannerTimer = 0.0f;
 
     Camera3D camera = {};
     camera.up = { 0.0f, 1.0f, 0.0f };
@@ -106,9 +112,19 @@ int main() {
 
     while (!WindowShouldClose() && !shouldQuit) {
         float dt = std::min(GetFrameTime(), 0.05f);
+        animTime += dt;
+
+        if (reloadAssetsBannerTimer > 0.0f) reloadAssetsBannerTimer -= dt;
 
         if (IsKeyPressed(KEY_M)) {
             audio.ToggleMute();
+        }
+
+        // Hot-Reload de modelos .glb exportados do Blender (F7)
+        if (IsKeyPressed(KEY_F7)) {
+            assets.ReloadAll();
+            reloadAssetsBannerTimer = 2.6f;
+            audio.PlayOrder();
         }
 
         // =====================================================================
@@ -142,12 +158,15 @@ int main() {
                 menu.Draw(largura, altura);
                 const char* audioTag = audio.muted ? "[M] Som: MUDO" : "[M] Som: PROCEDURAL ATIVO";
                 DrawText(audioTag, 24, 24, 16, audio.muted ? RED : GREEN);
+
+                const char* assetTag = TextFormat("[F7] Modelos Blender (.glb): %d / %d carregados", assets.loadedCount, assets.totalSlots);
+                DrawText(assetTag, 24, 48, 15, (assets.loadedCount > 0) ? SKYBLUE : LIGHTGRAY);
             EndDrawing();
             continue;
         }
 
         // =====================================================================
-        // ESTADO 2: EDITOR DE MAPAS IN-GAME (SAVEPOINT_14)
+        // ESTADO 2: EDITOR DE MAPAS IN-GAME
         // =====================================================================
         if (currentMode == GameMode::MAP_EDITOR) {
             if (IsKeyPressed(KEY_ESCAPE)) {
@@ -547,7 +566,7 @@ int main() {
         }
 
         // =====================================================================
-        // RENDERIZAÇÃO 3D
+        // RENDERIZAÇÃO 3D (MODELOS .GLB COM FALLBACK AUTOMÁTICO PARA CUBOS)
         // =====================================================================
         Vector3 eyePos = player.GetEyePosition();
         Vector3 forward = player.GetForward3D();
@@ -568,26 +587,10 @@ int main() {
                     DrawCubeWiresV(block.pos, block.size, BLACK);
                 }
 
-                mission.Draw3D();
+                mission.Draw3D(assets);
 
                 for (const auto& ally : allies) {
-                    if (ally.isDowned) {
-                        DrawCube({ ally.pos.x, ally.pos.y + 0.3f, ally.pos.z }, 0.85f, 0.55f, 1.5f, Fade(ally.color, 0.7f));
-                        DrawCubeWires({ ally.pos.x, ally.pos.y + 0.3f, ally.pos.z }, 0.85f, 0.55f, 1.5f, RED);
-                    } else if (ally.isSuppressed) {
-                        DrawCube({ ally.pos.x, ally.pos.y + 0.625f, ally.pos.z }, 0.85f, 1.25f, 0.85f, ally.color);
-                        DrawCubeWires({ ally.pos.x, ally.pos.y + 0.625f, ally.pos.z }, 0.85f, 1.25f, 0.85f, ORANGE);
-                        DrawCube({ ally.pos.x, ally.pos.y + 1.0f, ally.pos.z - 0.35f }, 0.5f, 0.18f, 0.2f, ORANGE);
-                    } else {
-                        DrawCube({ ally.pos.x, ally.pos.y + 0.9f, ally.pos.z }, 0.8f, 1.8f, 0.8f, ally.color);
-                        DrawCubeWires({ ally.pos.x, ally.pos.y + 0.9f, ally.pos.z }, 0.8f, 1.8f, 0.8f, BLACK);
-                        DrawCube({ ally.pos.x, ally.pos.y + 1.5f, ally.pos.z - 0.35f }, 0.5f, 0.2f, 0.2f, DARKBLUE);
-
-                        if (currentOrder == SquadOrder::HOLD || currentOrder == SquadOrder::SUPPRESS || ally.hasPingOrder) {
-                            Color ringColor = ally.hasPingOrder ? SKYBLUE : ((currentOrder == SquadOrder::SUPPRESS) ? ORANGE : SKYBLUE);
-                            DrawCircle3D({ ally.anchorPos.x, 0.03f, ally.anchorPos.z }, 0.65f, { 1.0f, 0.0f, 0.0f }, 90.0f, Fade(ringColor, 0.6f));
-                        }
-                    }
+                    assets.DrawAlly(ally, enemies, currentOrder, animTime);
                 }
 
                 for (size_t eIdx = 0; eIdx < enemies.size(); eIdx++) {
@@ -595,20 +598,7 @@ int main() {
                     if (!enemy.IsAlive()) continue;
 
                     bool isPingedTarget = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
-
-                    if (enemy.isSuppressed) {
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.44f, enemy.pos.z }, 1.04f, 0.88f, 1.04f, { 165, 55, 45, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.44f, enemy.pos.z }, 1.04f, 0.88f, 1.04f, YELLOW);
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.08f, enemy.pos.z }, 0.72f, 0.40f, 0.72f, { 195, 75, 65, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 1.08f, enemy.pos.z }, 0.72f, 0.40f, 0.72f, ORANGE);
-                    } else {
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 0.69f, enemy.pos.z }, 1.0f, 1.38f, 1.0f, { 200, 42, 52, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.69f, enemy.pos.z }, 1.0f, 1.38f, 1.0f, isPingedTarget ? YELLOW : BLACK);
-
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.65f, enemy.pos.z }, 0.72f, 0.54f, 0.72f, { 225, 65, 75, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 1.65f, enemy.pos.z }, 0.72f, 0.54f, 0.72f, isPingedTarget ? YELLOW : MAROON);
-                        DrawCube({ enemy.pos.x, enemy.pos.y + 1.62f, enemy.pos.z + 0.34f }, 0.52f, 0.16f, 0.12f, MAROON);
-                    }
+                    assets.DrawEnemy(enemy, player, allies, isPingedTarget, animTime);
 
                     if (enemy.currentTargetId != -1) {
                         Vector3 targetAim = (enemy.currentTargetId == 0)
@@ -642,7 +632,7 @@ int main() {
                 }
 
                 if (!missionEnded) {
-                    weapon.Draw(camera, isStealthFlank);
+                    weapon.Draw(camera, isStealthFlank, assets);
                 }
             EndMode3D();
 
@@ -685,6 +675,11 @@ int main() {
                 }
             }
 
+            if (reloadAssetsBannerTimer > 0.0f) {
+                const char* reloadMsg = TextFormat("ASSETS RECARREGADOS: %d / %d MODELOS .GLB ATIVOS", assets.loadedCount, assets.totalSlots);
+                DrawText(reloadMsg, cx - MeasureText(reloadMsg, 17) / 2, 114, 17, SKYBLUE);
+            }
+
             if (currentMode == GameMode::MOVEMENT_TEST) {
                 float unitsPerSec = horizSpeed * 50.0f;
                 Color speedColor = (unitsPerSec > 495.0f) ? GREEN : (player.isSprinting ? SKYBLUE : RAYWHITE);
@@ -696,8 +691,8 @@ int main() {
                 DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
 
                 DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
-                DrawText("1-5: Armas/Gadgets | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | ESC: Menu",
-                         20, altura - 26, 15, LIGHTGRAY);
+                DrawText("1-5: Armas | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | F7: Reload .glb | ESC: Menu",
+                         20, altura - 26, 14, LIGHTGRAY);
             } else {
                 if (tacticalPing.type == PingType::MOVE_COVER) {
                     Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
@@ -831,10 +826,11 @@ int main() {
                 DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
                 DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
                 DrawText("[Scroll Click] Ping Contextual", cmdX, 110, 15, (tacticalPing.type != PingType::NONE) ? YELLOW : LIGHTGRAY);
-                DrawText(audio.muted ? "[M] Som: MUDO" : "[M] Som: ATIVO", cmdX, 134, 14, audio.muted ? RED : GREEN);
+                DrawText(TextFormat("[M] Som: %s | [F7] .glb: %d/%d", audio.muted ? "MUDO" : "ON", assets.loadedCount, assets.totalSlots),
+                         cmdX, 134, 14, audio.muted ? RED : SKYBLUE);
 
-                DrawText("1-5: Armas | Scroll: Ping | F1-F3: Ordens | E: Arrastar | F: Interagir/Reanimar | F5: Reiniciar | ESC: Menu",
-                         20, altura - 26, 14, LIGHTGRAY);
+                DrawText("1-5: Armas | Scroll: Ping | F1-F3: Ordens | E: Arrastar | F: Interagir | F5: Reiniciar | F7: Reload .glb | ESC: Menu",
+                         20, altura - 26, 13, LIGHTGRAY);
             }
 
             const WeaponStats& wStats = weapon.GetCurrentStats();
@@ -893,6 +889,7 @@ int main() {
         EndDrawing();
     }
 
+    assets.Shutdown();
     audio.Shutdown();
     CloseWindow();
     return 0;

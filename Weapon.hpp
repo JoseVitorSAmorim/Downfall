@@ -5,6 +5,7 @@
 #include "rlgl.h"
 #include "World.hpp"
 #include "SquadAI.hpp"
+#include "AssetManager.hpp"
 #include <vector>
 #include <string>
 #include <array>
@@ -78,7 +79,6 @@ struct BallisticHitResult {
     Vector3 piercePoint = { 0.0f, 0.0f, 0.0f };
 };
 
-// Interseção exata entrada/saída (slab method) para calcular espessura atravessada no bloco
 inline bool IntersectRayBoxInterval(Ray ray, const BoundingBox& box, float& outEntry, float& outExit) {
     float tMin = 0.0f;
     float tMax = 100000.0f;
@@ -107,7 +107,6 @@ inline bool IntersectRayBoxInterval(Ray ray, const BoundingBox& box, float& outE
     return true;
 }
 
-// Traça o projétil com suporte a Headshot (2.5x) e Wallbang em coberturas finas
 inline BallisticHitResult TraceBallisticShot(Ray ray, float maxRange, float penetrationPower,
                                              const std::vector<WorldBlock>& world,
                                              const std::vector<EnemyBot>& enemies) {
@@ -131,7 +130,6 @@ inline BallisticHitResult TraceBallisticShot(Ray ray, float maxRange, float pene
         return a.entry < b.entry;
     });
 
-    // Descobre até onde o projétil consegue atravessar antes de parar em uma parede grossa
     float stopDist = maxRange;
     float remainingPen = penetrationPower;
     float wallDamageMult = 1.0f;
@@ -156,7 +154,6 @@ inline BallisticHitResult TraceBallisticShot(Ray ray, float maxRange, float pene
         }
     }
 
-    // Verifica colisão com Cabeça e Torso dos inimigos antes do stopDist
     BallisticHitResult res;
     res.endPoint = Vector3Add(ray.position, Vector3Scale(ray.direction, stopDist));
 
@@ -180,7 +177,6 @@ inline BallisticHitResult TraceBallisticShot(Ray ray, float maxRange, float pene
         }
     }
 
-    // Verifica se o projétil atravesou alguma parede antes de atingir o alvo
     float appliedWallMult = 1.0f;
     for (const auto& seg : piercedList) {
         if (closestEnemyDist > seg.exitDist) {
@@ -387,8 +383,9 @@ public:
         if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
     }
 
-    void Draw(const Camera3D& camera, bool isStealthFlank) const {
+    void Draw(const Camera3D& camera, bool isStealthFlank, const AssetManager& assets) const {
         WeaponId wid = GetCurrentWeaponId();
+        int wIdx = (int)wid;
         const WeaponStats& st = GetCurrentStats();
 
         if (st.isGrenade && GetCurrentAmmo() <= 0) return;
@@ -411,28 +408,38 @@ public:
             rlRotatef(18.0f + slashProgress * 55.0f, 0.0f, 0.0f, 1.0f);
             rlRotatef(-slashProgress * 65.0f, 1.0f, 0.0f, 0.0f);
 
-            DrawCube({ 0.0f, 0.0f, 0.06f }, 0.045f, 0.055f, 0.16f, { 35, 38, 44, 255 });
-            DrawCube({ 0.0f, 0.0f, -0.03f }, 0.08f, 0.08f, 0.02f, DARKGRAY);
-            DrawCube({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, LIGHTGRAY);
-            DrawCubeWires({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, statusLed);
+            if (assets.HasWeaponModel(wIdx)) {
+                assets.DrawWeaponModel(wIdx, WHITE);
+            } else {
+                DrawCube({ 0.0f, 0.0f, 0.06f }, 0.045f, 0.055f, 0.16f, { 35, 38, 44, 255 });
+                DrawCube({ 0.0f, 0.0f, -0.03f }, 0.08f, 0.08f, 0.02f, DARKGRAY);
+                DrawCube({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, LIGHTGRAY);
+                DrawCubeWires({ 0.0f, 0.005f, -0.16f }, 0.018f, 0.042f, 0.24f, statusLed);
+            }
         } else if (st.isGrenade) {
             float pullBack = (throwAnimTimer > 0.0f) ? sinf((throwAnimTimer / 0.30f) * PI) * 0.22f : 0.0f;
             rlTranslatef(0.24f + swayOffset.x + bobX, -0.22f + swayOffset.y + bobY, -0.44f + pullBack);
             rlRotatef(15.0f, 0.0f, 0.0f, 1.0f);
 
-            Color bodyCol = (wid == WeaponId::GADGET_FRAG) ? Color{ 55, 75, 55, 255 } : Color{ 195, 205, 215, 255 };
-            Color bandCol = (wid == WeaponId::GADGET_FRAG) ? RED : SKYBLUE;
+            if (assets.HasWeaponModel(wIdx)) {
+                assets.DrawWeaponModel(wIdx, WHITE);
+            } else {
+                Color bodyCol = (wid == WeaponId::GADGET_FRAG) ? Color{ 55, 75, 55, 255 } : Color{ 195, 205, 215, 255 };
+                Color bandCol = (wid == WeaponId::GADGET_FRAG) ? RED : SKYBLUE;
 
-            DrawCube({ 0.0f, 0.0f, 0.0f }, 0.09f, 0.13f, 0.09f, bodyCol);
-            DrawCubeWires({ 0.0f, 0.0f, 0.0f }, 0.09f, 0.13f, 0.09f, BLACK);
-            DrawCube({ 0.0f, 0.02f, 0.0f }, 0.096f, 0.025f, 0.096f, bandCol);
-            DrawCube({ 0.0f, 0.08f, 0.0f }, 0.04f, 0.03f, 0.04f, DARKGRAY);
+                DrawCube({ 0.0f, 0.0f, 0.0f }, 0.09f, 0.13f, 0.09f, bodyCol);
+                DrawCubeWires({ 0.0f, 0.0f, 0.0f }, 0.09f, 0.13f, 0.09f, BLACK);
+                DrawCube({ 0.0f, 0.02f, 0.0f }, 0.096f, 0.025f, 0.096f, bandCol);
+                DrawCube({ 0.0f, 0.08f, 0.0f }, 0.04f, 0.03f, 0.04f, DARKGRAY);
+            }
         } else {
             rlTranslatef(0.27f + swayOffset.x + bobX, -0.23f + swayOffset.y + bobY + reloadDrop, -0.52f + recoilZ);
             rlRotatef(recoilPitch + (isReloading ? -25.0f : 0.0f), 1.0f, 0.0f, 0.0f);
             rlRotatef(swayOffset.x * 120.0f, 0.0f, 1.0f, 0.0f);
 
-            if (wid == WeaponId::RIFLE) {
+            if (assets.HasWeaponModel(wIdx)) {
+                assets.DrawWeaponModel(wIdx, WHITE);
+            } else if (wid == WeaponId::RIFLE) {
                 DrawCube({ 0.0f, 0.0f, 0.0f }, 0.095f, 0.115f, 0.44f, { 42, 46, 54, 255 });
                 DrawCubeWires({ 0.0f, 0.0f, 0.0f }, 0.095f, 0.115f, 0.44f, BLACK);
                 DrawCube({ 0.0f, 0.015f, -0.32f }, 0.04f, 0.04f, 0.24f, { 28, 30, 35, 255 });

@@ -87,9 +87,118 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
 - **Status:** Implementado e modularizado (`Audio.hpp`, `main.cpp`, `Makefile`).
 - **Adicionado:**
   - `Audio.hpp`: Classe `ProceduralAudio` sintetizando buffers PCM 16-bit/44.1kHz via `MemAlloc` e `LoadSoundFromWave` sem arquivos externos (`sfxShootNormal`, `sfxShootStealth`, `sfxJump`, `sfxOrder`, `sfxDowned`, `sfxRevive`), com variação dinâmica de pitch (`SetSoundPitch`), verificação `IsAudioDeviceReady()` e tecla `M` para alternar mudo.
-### [SAVEPOINT_10 — ATUAL] Arsenal Completo (1–5), Granadas Físicas & Binds F1–F3
+### [SAVEPOINT_10] Arsenal Completo (1–5), Granadas Físicas & Binds F1–F3
 - **Status:** Implementado e modularizado (`Weapon.hpp`, `Audio.hpp`, `SquadAI.hpp`, `main.cpp`).
 - **Adicionado:**
   - `Weapon.hpp`: Enum `WeaponId` com 8 equipamentos distribuídos em 5 slots (`1`: Rifle, Escopeta, LMG; `2`: Pistola, Revólver; `3`: Faca Tática; `4`: Granada Frag; `5`: Granada Flashbang), alternância de sub-armas apertando `1` ou `2` novamente, recarga na tecla `R` e struct `ThrownGrenade` com física de rebote AABB e detonação em área.
   - `Audio.hpp`: Efeitos sonoros procedurais específicos por categoria (`sfxShootShotgun`, `sfxShootHeavy`, `sfxMelee`, `sfxExplosion`, `sfxReload`).
   - `SquadAI.hpp` & `main.cpp`: Comandos de esquadrão movidos para `F1` (Avançar), `F2` (Manter Posição) e `F3` (Fogo de Supressão); reset de cenário movido para `F5`.
+### [SAVEPOINT_11 — ATUAL] Ping Tático Contextual (`SquadAI.hpp`, `main.cpp`)
+- **Status:** Implementado e modularizado (`SquadAI.hpp`, `main.cpp`).
+- **Adicionado:**
+  - `SquadAI.hpp`: Struct `TacticalPing` (`PingType::MOVE_COVER` e `PingType::FOCUS_TARGET`) acionada via `MOUSE_BUTTON_MIDDLE` (`ProcessTacticalPing`).
+  - **Cobertura Contextual:** Ao pingar um bloco do cenário, calcula o lado protegido contra a ameaça ativa e envia apenas o aliado mais próximo para ancorar ali (`hasPingOrder = true`), mantendo os demais livres.
+  - **Foco de Fogo:** Ao pingar um inimigo, o esquadrão prioriza disparar nele e ajusta o ângulo caso perca linha de visão.
+  - **Bots Genéricos:** Aliados mantidos sem classes fixas para substituição direta por jogadores no futuro multiplayer LAN.
+
+[SAVEPOINT_12] Hitboxes (Headshot), Penetração e Feedback de Combate
+
+    Arquivos: Weapon.hpp, SquadAI.hpp, main.cpp
+
+    O que resolve: Atualmente inimigos e aliados têm apenas uma caixa AABB única e pouco retorno visual ao acertar ou sofrer tiros.
+
+    Mecânicas:
+
+        Hitbox Dupla: Separação entre torso (1.0x dano) e cabeça (2.5x dano crítico), inclusive ajustando a altura quando o alvo está agachado sob supressão.
+
+        Penetração de Balística (Wallbang): Armas pesadas (LMG e Revólver .44) atravessam blocos finos (espessura menor que 0.6m) com dano reduzido.
+
+        Feedback no HUD: Marcador de acerto (hitmarker) branco/vermelho na mira e arco direcional vermelho na tela indicando de qual direção veio o disparo.
+
+[SAVEPOINT_13] Objetos Interativos, Objetivos e Loop de Missão
+
+    Arquivos: Objectives.hpp (novo), World.hpp, main.cpp
+
+    O que resolve: As partidas atuais não têm condição de vitória, derrota ou objetivos além de eliminar ondas com T.
+
+    Mecânicas:
+
+        Elementos de Cenário: Portas destrutíveis/abríveis, barris explosivos, caixas de reabastecimento (munição e granadas) e terminais de hack/captura de zona.
+
+        Estrutura de Fase: Objetivos sequenciais (ex.: Invadir ponto A → Hackear terminal → Extrair na zona segura), tela de Missão Concluída / Esquadrão Eliminado e pontuação tática.
+
+[SAVEPOINT_14] Editor de Mapas In-Game (MapEditor.hpp)
+
+    Arquivos: MapEditor.hpp (novo), World.hpp, Menu.hpp
+
+    O que resolve: Construir fases editando coordenadas X/Y/Z manualmente no .txt é lento.
+
+    Mecânicas:
+
+        Modo Construção no Menu: Câmera livre (noclip), grade magnética (snap-to-grid), criação, redimensionamento e pintura de blocos em tempo real.
+
+        Marcadores Lógicos: Posicionamento visual de spawns do esquadrão, spawns de inimigos, caixas de munição e zonas de objetivo, exportando direto para arquivos .txt compatíveis com o LevelLoader.
+
+[SAVEPOINT_15] Suporte a Modelos 3D do Blender & Animações Esqueléticas
+
+    Arquivos: AssetManager.hpp (novo), Weapon.hpp, SquadAI.hpp, main.cpp
+
+    O que resolve: Substituir os cubos coloridos por malhas texturizadas e animadas vindas do Blender.
+
+    Mecânicas:
+
+        Importação .glb / .iqm: Carregamento via LoadModel e LoadModelAnimations com máquina de estados de animação (Idle, Run, Crouch_Cover, Downed, Fire).
+
+        Acoplamento em Ossos (Bone Attachment): Fixar os modelos 3D das armas na mão direita dos personagens e viewmodels detalhados em primeira pessoa.
+
+        Fallback Automático: Se o arquivo .glb ainda não existir na pasta assets/, o jogo desenha os cubos atuais automaticamente sem travar.
+
+[SAVEPOINT_16] Áudio Espacial 3D & Suporte a Arquivos Externos (.wav / .ogg)
+
+    Arquivos: Audio.hpp
+
+    O que resolve: Evoluir o sintetizador atual para suportar trilhas sonoras e efeitos gravados com direcionalidade 3D.
+
+    Mecânicas:
+
+        Carregamento Híbrido: Tenta carregar arquivos reais (assets/sfx/*.ogg e assets/music/*.ogg via LoadSound / LoadMusicStream); se não encontrar, usa os sons procedurais do SAVEPOINT_09.
+
+        Atenuação e Panning 3D: Calcula distância e produto escalar com o vetor direito da câmera (SetSoundVolume e SetSoundPan) para você ouvir de que lado vêm os tiros e passos.
+
+        Trilha Dinâmica: Música ambiente tranquila que alterna suavemente para percussão intensa quando o Aggro do esquadrão sobe.
+
+[SAVEPOINT_17] Sistema de Cutscenes & Eventos Roteirizados (Cutscene.hpp)
+
+    Arquivos: Cutscene.hpp (novo), World.hpp, main.cpp
+
+    O que resolve: Narrativa de entrada nas fases, apresentação de emboscadas e eventos cinematográficos.
+
+    Mecânicas:
+
+        Trilhos de Câmera (Keyframes): Interpolação suave de posição e alvo da câmera 3D, ocultando o HUD de combate e ativando barras pretas (letterbox) com legendas sincronizadas.
+
+        Gatilhos de Área (Trigger Zones): Caixas invisíveis no mapa que disparam diálogos de rádio, abrem portões ou fazem reforços inimigos surgirem quando o jogador cruza uma sala.
+
+[SAVEPOINT_18] Menu de Loadout, Configurações e Save Persistente
+
+    Arquivos: Menu.hpp, SaveSystem.hpp (novo)
+
+    O que resolve: Permitir personalizar o equipamento antes da partida e salvar progresso/preferências.
+
+    Mecânicas:
+
+        Tela de Briefing / Loadout: Escolher sua arma primária, secundária e gadgets antes de iniciar a missão.
+
+        Configurações & Save: Sliders de sensibilidade do mouse, FOV, volume de SFX/Música e desbloqueio de fases salvos em savegame.cfg.
+
+[SAVEPOINT_19] Multiplayer LAN (Host / Cliente via UDP)
+
+    Arquivos: Network.hpp (novo), Menu.hpp, main.cpp
+
+    O que resolve: Permitir que até 4 jogadores entrem na mesma partida na rede local assumindo o controle de Alpha, Bravo, Charlie e Delta (substituindo os bots conforme entram).
+
+    Mecânicas:
+
+        Arquitetura Host-Autoritativo: Um jogador cria a sala (Host) e os outros conectam pelo IP local usando sockets UDP não-bloqueantes (ou biblioteca ENet).
+
+        Replicação de Estado: Pacotes compactos sincronizando posição, rotação (yaw/pitch), estado (agachado/caído), disparos, granadas lançadas e ordens do líder.

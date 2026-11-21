@@ -9,7 +9,7 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
                         ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
                         std::vector<EnemyBot>& enemies, std::vector<Tracer>& tracers,
                         std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
-                        SquadOrder& currentOrder) {
+                        SquadOrder& currentOrder, TacticalPing& tacticalPing) {
     player = SourcePlayer();
     weapon = ViewmodelWeapon();
     tracers.clear();
@@ -18,6 +18,7 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     allies.clear();
     enemies.clear();
     currentOrder = SquadOrder::HOLD;
+    tacticalPing.Clear();
 
     if (mode == GameMode::MOVEMENT_TEST) {
         world = LevelLoader::LoadFromFile("mapa_movimento.txt", MapPreset::MOVEMENT_COURSE);
@@ -27,23 +28,22 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
         world = LevelLoader::LoadFromFile("mapa_treino.txt", MapPreset::FIRING_RANGE);
         player.pos = { 0.0f, 0.5f, 14.0f };
         allies = {
-            { 1, "Bravo (Tanque)",    { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, 100.0f, 65.0f, 0.4f, 0.0f, SKYBLUE },
-            { 2, "Charlie (Suporte)", {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, 100.0f, 55.0f, 0.9f, 2.1f, LIME }
+            { 1, "Bravo",   { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
+            { 2, "Charlie", {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME }
         };
         ResetWave(enemies);
     } else {
         world = LevelLoader::LoadFromFile("mapa_squad.txt", MapPreset::SQUAD_ARENA);
         player.pos = { 0.0f, 0.5f, 14.0f };
         allies = {
-            { 1, "Bravo (Tanque)",    { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, 100.0f, 65.0f, 0.4f, 0.0f, SKYBLUE },
-            { 2, "Charlie (Suporte)", {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, 100.0f, 55.0f, 0.9f, 2.1f, LIME },
-            { 3, "Delta (Flanco)",    {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 30.0f, 1.3f, 4.2f, GOLD }
+            { 1, "Bravo",   { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
+            { 2, "Charlie", {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME },
+            { 3, "Delta",   {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 50.0f, 1.3f, 4.2f, GOLD }
         };
         ResetWave(enemies);
     }
 }
 
-// Calcula direção com dispersão aleatória para balins da escopeta e rajadas
 Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
     if (spread <= 0.0f) return dir;
     float rx = ((float)GetRandomValue(-1000, 1000) / 1000.0f) * spread;
@@ -55,7 +55,7 @@ Vector3 ApplySpreadToDirection(Vector3 dir, float spread) {
 int main() {
     const int largura = 1280;
     const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Arsenal & Binds (SAVEPOINT_10)");
+    InitWindow(largura, altura, "Squad Tactical Shooter - Ping Tatico Contextual (SAVEPOINT_11)");
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -76,6 +76,7 @@ int main() {
     std::vector<ExplosionEffect> explosions;
 
     SquadOrder currentOrder = SquadOrder::HOLD;
+    TacticalPing tacticalPing;
     float orderBannerTimer = 0.0f;
 
     Camera3D camera = {};
@@ -107,7 +108,7 @@ int main() {
                 continue;
             } else if (chosen != GameMode::MAIN_MENU) {
                 currentMode = chosen;
-                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder);
+                InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder, tacticalPing);
                 audio.PlayOrder();
                 DisableCursor();
             }
@@ -133,13 +134,14 @@ int main() {
 
         // Reiniciar cenário completo com F5
         if (IsKeyPressed(KEY_F5)) {
-            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder);
+            InitializeTestMode(currentMode, world, player, weapon, allies, enemies, tracers, grenades, explosions, currentOrder, tacticalPing);
             audio.PlayOrder();
         }
 
         // Resetar onda de inimigos com T
         if (IsKeyPressed(KEY_T) && currentMode != GameMode::MOVEMENT_TEST) {
             ResetWave(enemies);
+            tacticalPing.Clear();
             audio.PlayOrder();
         }
 
@@ -163,27 +165,33 @@ int main() {
         }
 
         // =====================================================================
-        // COMANDOS TÁTICOS DE ESQUADRAO (F1, F2 e F3)
+        // COMANDOS TÁTICOS GLOBAIS DE ESQUADRÃO (F1, F2 e F3)
         // =====================================================================
         if (!player.isDowned && !allies.empty()) {
             if (IsKeyPressed(KEY_F1)) {
                 currentOrder = SquadOrder::ADVANCE;
                 orderBannerTimer = 2.2f;
+                for (auto& ally : allies) ally.hasPingOrder = false;
+                if (tacticalPing.type == PingType::MOVE_COVER) tacticalPing.Clear();
                 audio.PlayOrder();
             } else if (IsKeyPressed(KEY_F2)) {
                 currentOrder = SquadOrder::HOLD;
                 orderBannerTimer = 2.2f;
-                audio.PlayOrder();
                 for (auto& ally : allies) {
+                    ally.hasPingOrder = false;
                     if (!ally.isDowned) ally.anchorPos = ally.pos;
                 }
+                if (tacticalPing.type == PingType::MOVE_COVER) tacticalPing.Clear();
+                audio.PlayOrder();
             } else if (IsKeyPressed(KEY_F3)) {
                 currentOrder = SquadOrder::SUPPRESS;
                 orderBannerTimer = 2.2f;
-                audio.PlayOrder();
                 for (auto& ally : allies) {
+                    ally.hasPingOrder = false;
                     if (!ally.isDowned) ally.anchorPos = ally.pos;
                 }
+                if (tacticalPing.type == PingType::MOVE_COVER) tacticalPing.Clear();
+                audio.PlayOrder();
             }
         }
 
@@ -267,6 +275,18 @@ int main() {
         camera.position = eyePos;
         camera.target = Vector3Add(eyePos, forward);
 
+        // =====================================================================
+        // PING TÁTICO CONTEXTUAL (BOTÃO DO MEIO DO MOUSE)
+        // =====================================================================
+        if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) && !player.isDowned && !allies.empty()) {
+            if (ProcessTacticalPing(eyePos, forward, world, allies, enemies, tacticalPing)) {
+                if (audio.initialized) {
+                    SetSoundPitch(audio.sfxOrder, (tacticalPing.type == PingType::FOCUS_TARGET) ? 1.28f : 0.92f);
+                    audio.PlayOrder();
+                }
+            }
+        }
+
         float maxAllyAggro = 0.0f;
         for (const auto& ally : allies) {
             if (!ally.isDowned && ally.aggro > maxAllyAggro) maxAllyAggro = ally.aggro;
@@ -291,14 +311,12 @@ int main() {
                 }
 
                 if (wStats.isGrenade) {
-                    // Lança Granada de Fragmentação ou Flashbang
                     bool isFlash = (wStats.id == WeaponId::GADGET_FLASH);
                     Vector3 spawnPos = Vector3Add(eyePos, Vector3Scale(forward, 0.65f));
                     Vector3 throwVel = Vector3Add(Vector3Scale(forward, 17.5f), { 0.0f, 4.2f, 0.0f });
                     throwVel = Vector3Add(throwVel, Vector3Scale(player.vel, 0.35f));
                     grenades.push_back({ spawnPos, throwVel, isFlash, isFlash ? 1.8f : 2.2f, false });
                 } else {
-                    // Armas de fogo (balins múltiplos para escopeta) e arma branca
                     Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
                     Vector3 muzzlePos = Vector3Add(eyePos, Vector3Add(Vector3Scale(right, 0.24f), { 0, -0.18f, 0 }));
 
@@ -341,7 +359,7 @@ int main() {
             }
         }
 
-        // Atualiza granadas lançadas e aplica efeito da explosão nos inimigos
+        // Atualiza granadas lançadas e aplica efeito da explosão
         size_t prevExplosions = explosions.size();
         UpdateGrenades(dt, grenades, explosions, world);
 
@@ -355,14 +373,12 @@ int main() {
                 if (dist <= exp.maxRadius) {
                     float falloff = 1.0f - (dist / exp.maxRadius) * 0.5f;
                     if (exp.isFlashbang) {
-                        // Flashbang suprime instantaneamente e reduz o Aggro do jogador
                         enemy.hp -= 5.0f;
                         enemy.suppression = 100.0f;
                         enemy.isSuppressed = true;
                         enemy.coverSearchTimer = 0.0f;
                         player.aggro = std::max(0.0f, player.aggro - 20.0f);
                     } else {
-                        // Fragmentação causa dano alto em área
                         enemy.hp -= 115.0f * falloff;
                         enemy.suppression = 100.0f;
                         enemy.isSuppressed = true;
@@ -371,7 +387,6 @@ int main() {
             }
         }
 
-        // Limpa granadas detonadas e efeitos expirados
         grenades.erase(
             std::remove_if(grenades.begin(), grenades.end(), [](const ThrownGrenade& g) { return g.exploded; }),
             grenades.end()
@@ -395,7 +410,7 @@ int main() {
             player.aggro = std::max(0.0f, player.aggro - decayRate * dt);
         }
 
-        // Atualização da IA e alertas sonoros de queda/reanimação
+        // Atualização da IA e alertas sonoros
         bool prevPlayerDowned = player.isDowned;
         std::vector<bool> prevAllyDowned(allies.size(), false);
         for (size_t i = 0; i < allies.size(); i++) {
@@ -403,7 +418,7 @@ int main() {
         }
 
         if (!allies.empty() || !enemies.empty()) {
-            UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers);
+            UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
             UpdateEnemies(dt, enemies, player, allies, world, tracers);
         }
 
@@ -451,15 +466,18 @@ int main() {
                         DrawCubeWires({ ally.pos.x, ally.pos.y + 0.9f, ally.pos.z }, 0.8f, 1.8f, 0.8f, BLACK);
                         DrawCube({ ally.pos.x, ally.pos.y + 1.5f, ally.pos.z - 0.35f }, 0.5f, 0.2f, 0.2f, DARKBLUE);
 
-                        if (currentOrder == SquadOrder::HOLD || currentOrder == SquadOrder::SUPPRESS) {
-                            Color ringColor = (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : SKYBLUE;
+                        if (currentOrder == SquadOrder::HOLD || currentOrder == SquadOrder::SUPPRESS || ally.hasPingOrder) {
+                            Color ringColor = ally.hasPingOrder ? SKYBLUE : ((currentOrder == SquadOrder::SUPPRESS) ? ORANGE : SKYBLUE);
                             DrawCircle3D({ ally.anchorPos.x, 0.03f, ally.anchorPos.z }, 0.65f, { 1.0f, 0.0f, 0.0f }, 90.0f, Fade(ringColor, 0.6f));
                         }
                     }
                 }
 
-                for (const auto& enemy : enemies) {
+                for (size_t eIdx = 0; eIdx < enemies.size(); eIdx++) {
+                    const auto& enemy = enemies[eIdx];
                     if (!enemy.IsAlive()) continue;
+
+                    bool isPingedTarget = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
 
                     if (enemy.isSuppressed) {
                         DrawCube({ enemy.pos.x, enemy.pos.y + 0.625f, enemy.pos.z }, 1.05f, 1.25f, 1.05f, { 165, 55, 45, 255 });
@@ -467,7 +485,7 @@ int main() {
                         DrawCube({ enemy.pos.x, enemy.pos.y + 1.0f, enemy.pos.z + 0.42f }, 0.6f, 0.18f, 0.2f, ORANGE);
                     } else {
                         DrawCube({ enemy.pos.x, enemy.pos.y + 0.95f, enemy.pos.z }, 1.0f, 1.9f, 1.0f, { 210, 45, 55, 255 });
-                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.95f, enemy.pos.z }, 1.0f, 1.9f, 1.0f, BLACK);
+                        DrawCubeWires({ enemy.pos.x, enemy.pos.y + 0.95f, enemy.pos.z }, 1.0f, 1.9f, 1.0f, isPingedTarget ? YELLOW : BLACK);
                         DrawCube({ enemy.pos.x, enemy.pos.y + 1.5f, enemy.pos.z + 0.42f }, 0.6f, 0.2f, 0.2f, MAROON);
                     }
 
@@ -483,7 +501,9 @@ int main() {
                     }
                 }
 
-                // Desenha granadas lançadas e explosões
+                // Desenha marcador 3D do Ping Tático
+                DrawTacticalPing3D(tacticalPing, allies, enemies);
+
                 for (const auto& g : grenades) {
                     DrawSphere(g.pos, 0.16f, g.isFlashbang ? SKYBLUE : DARKGREEN);
                     DrawSphereWires(g.pos, 0.17f, 6, 6, g.isFlashbang ? WHITE : RED);
@@ -521,6 +541,18 @@ int main() {
                 DrawText("1-5: Armas/Gadgets | Shift: Correr | Espaco+Ctrl: Crouch-Jump | F5: Reiniciar | ESC: Menu",
                          20, altura - 26, 15, LIGHTGRAY);
             } else {
+                // Marcador 2D do Ping de Cobertura no mundo
+                if (tacticalPing.type == PingType::MOVE_COVER) {
+                    Vector3 beaconTop = { tacticalPing.worldPos.x, 2.15f, tacticalPing.worldPos.z };
+                    if (Vector3DotProduct(forward, Vector3Subtract(beaconTop, eyePos)) > 0.0f) {
+                        Vector2 pScreen = GetWorldToScreen(beaconTop, camera);
+                        if (pScreen.x > 0 && pScreen.x < largura && pScreen.y > 0 && pScreen.y < altura) {
+                            const char* pingTag = TextFormat("COBERTURA [%s]", allies[tacticalPing.assignedAllyId - 1].name.c_str());
+                            DrawText(pingTag, (int)pScreen.x - MeasureText(pingTag, 13) / 2, (int)pScreen.y - 16, 13, SKYBLUE);
+                        }
+                    }
+                }
+
                 for (const auto& ally : allies) {
                     float headOffset = ally.isDowned ? 1.2f : (ally.isSuppressed ? 1.6f : 2.15f);
                     Vector3 headWorld = { ally.pos.x, ally.pos.y + headOffset, ally.pos.z };
@@ -553,11 +585,15 @@ int main() {
                         if (ally.isSuppressed) {
                             const char* suppTxt = "SUPRIMIDO!";
                             DrawText(suppTxt, (int)screenPos.x - MeasureText(suppTxt, 12) / 2, (int)screenPos.y - 23, 12, ORANGE);
+                        } else if (ally.hasPingOrder) {
+                            const char* moveTxt = "INDO P/ COBERTURA";
+                            DrawText(moveTxt, (int)screenPos.x - MeasureText(moveTxt, 12) / 2, (int)screenPos.y - 23, 12, SKYBLUE);
                         }
                     }
                 }
 
-                for (const auto& enemy : enemies) {
+                for (size_t eIdx = 0; eIdx < enemies.size(); eIdx++) {
+                    const auto& enemy = enemies[eIdx];
                     if (!enemy.IsAlive()) continue;
                     float headOffset = enemy.isSuppressed ? 1.65f : 2.25f;
                     Vector3 headWorld = { enemy.pos.x, enemy.pos.y + headOffset, enemy.pos.z };
@@ -571,6 +607,12 @@ int main() {
                         DrawRectangle((int)screenPos.x - 30, (int)screenPos.y + 3, 60, 5, BLACK);
                         Color enemySuppCol = enemy.isSuppressed ? ORANGE : YELLOW;
                         DrawRectangle((int)screenPos.x - 29, (int)screenPos.y + 4, (int)(58 * (enemy.suppression / 100.0f)), 3, enemySuppCol);
+
+                        bool isPinged = (tacticalPing.type == PingType::FOCUS_TARGET && tacticalPing.targetEnemyIdx == (int)eIdx);
+                        if (isPinged) {
+                            const char* focusTag = "[ALVO PRIORITARIO]";
+                            DrawText(focusTag, (int)screenPos.x - MeasureText(focusTag, 13) / 2, (int)screenPos.y - 36, 13, YELLOW);
+                        }
 
                         const char* statusTag = enemy.isSuppressed
                             ? "SUPRIMIDO!"
@@ -618,28 +660,28 @@ int main() {
 
                 for (size_t i = 0; i < allies.size(); i++) {
                     const auto& a = allies[i];
+                    const char* tagExtra = a.isSuppressed ? "[SUPRIMIDO]" : (a.hasPingOrder ? "[PING: COBERTURA]" : "");
                     const char* allyLine = a.isDowned
                         ? TextFormat("%s: [CAIDO - %.0fs]", a.name.c_str(), a.bleedoutTimer)
-                        : TextFormat("%s: HP %.0f | Aggro %.0f%% %s", a.name.c_str(), a.hp, a.aggro, a.isSuppressed ? "[SUPRIMIDO]" : "");
+                        : TextFormat("%s: HP %.0f | Aggro %.0f%% %s", a.name.c_str(), a.hp, a.aggro, tagExtra);
                     Color lineColor = a.isDowned ? RED : (a.isSuppressed ? ORANGE : a.color);
                     DrawText(allyLine, 20, 68 + (int)i * 22, 15, lineColor);
                 }
 
-                // Painel de Ordens Táticas (F1, F2, F3)
+                // Painel de Ordens Táticas e Ping
                 int cmdX = largura - 340;
                 DrawText("COMANDOS DO ESQUADRAO:", cmdX, 20, 16, WHITE);
                 DrawText("[F1] Avancar", cmdX, 44, 15, (currentOrder == SquadOrder::ADVANCE) ? GREEN : GRAY);
                 DrawText("[F2] Manter Posicao", cmdX, 66, 15, (currentOrder == SquadOrder::HOLD) ? SKYBLUE : GRAY);
                 DrawText("[F3] Fogo de Supressao", cmdX, 88, 15, (currentOrder == SquadOrder::SUPPRESS) ? ORANGE : GRAY);
-                DrawText(audio.muted ? "[M] Som: MUDO" : "[M] Som: ATIVO", cmdX, 114, 14, audio.muted ? RED : GREEN);
+                DrawText("[Scroll Click] Ping Contextual", cmdX, 110, 15, (tacticalPing.type != PingType::NONE) ? YELLOW : LIGHTGRAY);
+                DrawText(audio.muted ? "[M] Som: MUDO" : "[M] Som: ATIVO", cmdX, 134, 14, audio.muted ? RED : GREEN);
 
-                DrawText("1-5: Armas/Gadgets | R: Recarregar | E: Arrastar | F: Reanimar | T: Resetar Inimigos | F5: Reiniciar | ESC: Menu",
+                DrawText("1-5: Armas | Scroll Click: Ping | F1-F3: Ordens | E: Arrastar | F: Reanimar | F5: Reiniciar | ESC: Menu",
                          20, altura - 26, 14, LIGHTGRAY);
             }
 
-            // =================================================================
-            // BARRA DE ARSENAL E MUNIÇÃO (SLOTS 1 A 5 - INFERIOR DIREITO)
-            // =================================================================
+            // Barra de Arsenal e Munição (Slots 1 a 5)
             int hudW = 330;
             int hudH = 82;
             int hudX = largura - hudW - 20;
@@ -648,7 +690,6 @@ int main() {
             DrawRectangle(hudX, hudY, hudW, hudH, Color{ 18, 22, 30, 215 });
             DrawRectangleLinesEx({ (float)hudX, (float)hudY, (float)hudW, (float)hudH }, 1.5f, wStats.accentColor);
 
-            // Indicador dos 5 slots no topo da caixa
             const char* slotNames[5] = { "[1] PRIM", "[2] SEC", "[3] FACA", "[4] FRAG", "[5] FLASH" };
             for (int s = 1; s <= 5; s++) {
                 bool active = (weapon.currentSlot == s);

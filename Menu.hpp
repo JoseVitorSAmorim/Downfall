@@ -87,6 +87,13 @@ public:
     }
 
 private:
+    static void GetTwoColumnLayout(int width, int& leftX, int& rightX, int& colW) {
+        int margin = std::max(36, width / 22);
+        colW = std::min(560, (width - margin * 3) / 2);
+        leftX = margin;
+        rightX = width - colW - margin;
+    }
+
     static bool DrawButton(Rectangle rect, const char* label, const char* sublabel, Color accent, bool isSelected = false) {
         Vector2 mouse = GetMousePosition();
         bool hovered = CheckCollisionPointRec(mouse, rect);
@@ -112,13 +119,12 @@ private:
     // TELA 1: MENU PRINCIPAL
     // =========================================================================
     GameMode UpdateMainScreen(int width, int height, Vector2 mouse, bool click, ProceduralAudio& audio) {
-        (void)height;
         (void)mouse;
         (void)click;
         int cx = width / 2;
-        float btnW = 480.0f;
+        float btnW = std::min(520.0f, (float)width - 80.0f);
         float btnX = cx - btnW * 0.5f;
-        float startY = 188.0f;
+        float startY = std::max(175.0f, height * 0.25f);
         float gap = 64.0f;
 
         if (IsKeyPressed(KEY_ENTER)) {
@@ -159,24 +165,24 @@ private:
     }
 
     void DrawMainScreen(int width, int height, const SaveSystem& saveSystem) const {
-        (void)height;
         int cx = width / 2;
+        float startY = std::max(175.0f, height * 0.25f);
+        int headerBaseY = (int)startY - 118;
 
         const char* title = "SQUAD TACTICAL SHOOTER";
-        DrawText(title, cx - MeasureText(title, 36) / 2, 72, 36, RAYWHITE);
+        DrawText(title, cx - MeasureText(title, 36) / 2, headerBaseY, 36, RAYWHITE);
 
         const char* sub = TextFormat("FASE DESBLOQUEADA: %d/%d  |  MISSOES CONCLUIDAS: %d  |  ABATES: %d",
                                      saveSystem.data.unlockedPhase, SaveSystem::MAX_PHASES,
                                      saveSystem.data.missionsCompleted, saveSystem.data.totalKills);
-        DrawText(sub, cx - MeasureText(sub, 15) / 2, 118, 15, SKYBLUE);
+        DrawText(sub, cx - MeasureText(sub, 15) / 2, headerBaseY + 46, 15, SKYBLUE);
 
         const char* loadoutTag = TextFormat("LOADOUT ATUAL: %s + %s",
                                             saveSystem.GetPrimaryName(), saveSystem.GetSecondaryName());
-        DrawText(loadoutTag, cx - MeasureText(loadoutTag, 14) / 2, 142, 14, GOLD);
+        DrawText(loadoutTag, cx - MeasureText(loadoutTag, 14) / 2, headerBaseY + 70, 14, GOLD);
 
-        float btnW = 480.0f;
+        float btnW = std::min(520.0f, (float)width - 80.0f);
         float btnX = cx - btnW * 0.5f;
-        float startY = 188.0f;
         float gap = 64.0f;
 
         DrawButton({ btnX, startY + gap * 0, btnW, 54.0f },
@@ -219,11 +225,9 @@ private:
     // TELA 2: LOBBY MULTIPLAYER LAN (HOST / CLIENTE UDP)
     // =========================================================================
     GameMode UpdateLanLobbyScreen(int width, int height, SaveSystem& saveSystem, ProceduralAudio& audio, LanNetworkManager& net) {
-        int leftX = 60;
-        int colW = 550;
-        int rightX = width - colW - 60;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
 
-        // Coluna Esquerda: Criar Sala (Host)
         Rectangle hostCreateBtn = { (float)leftX, 185.0f, (float)colW, 58.0f };
         if (CheckCollisionPointRec(GetMousePosition(), hostCreateBtn) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             if (net.StartHost(LanNetworkManager::DEFAULT_PORT)) {
@@ -233,7 +237,6 @@ private:
             }
         }
 
-        // Se for Host, permite iniciar a partida para todos os conectados
         if (net.IsHost()) {
             Rectangle launchHostBtn = { (float)leftX, 495.0f, (float)colW, 62.0f };
             if ((CheckCollisionPointRec(GetMousePosition(), launchHostBtn) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) || IsKeyPressed(KEY_ENTER)) {
@@ -244,7 +247,6 @@ private:
             }
         }
 
-        // Coluna Direita: Campo de IP e Conectar como Cliente
         Rectangle ipBox = { (float)rightX, 215.0f, (float)colW, 48.0f };
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             ipFieldFocused = CheckCollisionPointRec(GetMousePosition(), ipBox);
@@ -263,12 +265,12 @@ private:
             }
         }
 
-        // Atalhos rápidos de IP
-        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 274.0f, 265.0f, 38.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        float halfW = (colW - 16.0f) * 0.5f;
+        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 274.0f, halfW, 38.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             net.hostIpInput = "127.0.0.1";
             audio.PlayOrder();
         }
-        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX + 285.0f, 274.0f, 265.0f, 38.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX + halfW + 16.0f, 274.0f, halfW, 38.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             net.hostIpInput = "192.168.1.";
             ipFieldFocused = true;
             audio.PlayOrder();
@@ -283,14 +285,12 @@ private:
             }
         }
 
-        // Se o Host iniciou a partida remotamente, o Cliente entra automaticamente na arena
         if (net.IsClient() && net.matchStarted) {
             saveSystem.Save();
             audio.PlayOrder();
             return GameMode::SQUAD_MISSION;
         }
 
-        // Botão Voltar / Desconectar
         Rectangle backBtn = { (float)leftX, (float)height - 96.0f, 280.0f, 52.0f };
         if (CheckCollisionPointRec(GetMousePosition(), backBtn) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             net.Shutdown();
@@ -302,18 +302,14 @@ private:
     }
 
     void DrawLanLobbyScreen(int width, int height, const SaveSystem& saveSystem, const LanNetworkManager& net) const {
-        int leftX = 60;
-        int colW = 550;
-        int rightX = width - colW - 60;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
 
         DrawText("MULTIPLAYER COOPERATIVO LAN (UDP HOST / CLIENTE)", leftX, 38, 28, RAYWHITE);
         DrawText(TextFormat("Status da Rede: %s", net.statusMessage.c_str()), leftX, 74, 16,
                  net.IsActive() ? GREEN : SKYBLUE);
-        DrawLine(leftX, 102, width - 60, 102, Color{ 55, 68, 90, 255 });
+        DrawLine(leftX, 102, width - leftX, 102, Color{ 55, 68, 90, 255 });
 
-        // =====================================================================
-        // COLUNA ESQUERDA: CRIAR SALA (HOST AUTORITATIVO)
-        // =====================================================================
         DrawText("1. CRIAR SALA NA REDE LOCAL (HOST):", leftX, 122, 18, GREEN);
         DrawText(TextFormat("Seu IP Local: %s  |  Porta UDP: %d  |  Fase: 0%d",
                             net.detectedLocalIp.c_str(), LanNetworkManager::DEFAULT_PORT, saveSystem.data.selectedPhase),
@@ -324,7 +320,6 @@ private:
                    "Voce controla Alpha (Lider) e simula inimigos e objetivos",
                    GREEN, net.IsHost());
 
-        // Roster dos 4 Slots do Esquadrão
         DrawRectangle(leftX, 260, colW, 218, Color{ 20, 25, 34, 235 });
         DrawRectangleLines(leftX, 260, colW, 218, Color{ 55, 70, 95, 255 });
         DrawText("FORMACAO DO ESQUADRAO (4 OPERADORES):", leftX + 16, 274, 16, SKYBLUE);
@@ -349,7 +344,7 @@ private:
 
             DrawText(TextFormat("Slot %d - %s", s + 1, LanNetworkManager::GetSlotCallsign(s)),
                      leftX + 18, rowY, 16, slotColors[s]);
-            DrawText(roleTag, leftX + 275, rowY, 15, human ? GREEN : LIGHTGRAY);
+            DrawText(roleTag, leftX + colW / 2, rowY, 15, human ? GREEN : LIGHTGRAY);
         }
 
         if (net.IsHost()) {
@@ -360,9 +355,6 @@ private:
                        GREEN, true);
         }
 
-        // =====================================================================
-        // COLUNA DIREITA: ENTRAR EM SALA EXISTENTE (CLIENTE UDP)
-        // =====================================================================
         DrawText("2. ENTRAR EM SALA EXISTENTE (CLIENTE):", rightX, 122, 18, SKYBLUE);
         DrawText("Digite o IPv4 do Host na rede local (ou 127.0.0.1 para testar no mesmo PC):",
                  rightX, 150, 14, LIGHTGRAY);
@@ -373,15 +365,15 @@ private:
         DrawRectangleLinesEx(ipBox, ipFieldFocused ? 2.0f : 1.2f, ipFieldFocused ? SKYBLUE : GRAY);
         DrawText(net.hostIpInput.c_str(), rightX + 16, 229, 20, WHITE);
 
-        DrawButton({ (float)rightX, 274.0f, 265.0f, 38.0f }, "LOCALHOST (127.0.0.1)", "", LIGHTGRAY);
-        DrawButton({ (float)rightX + 285.0f, 274.0f, 265.0f, 38.0f }, "REDE LAN (192.168.1.x)", "", LIGHTGRAY);
+        float halfW = (colW - 16.0f) * 0.5f;
+        DrawButton({ (float)rightX, 274.0f, halfW, 38.0f }, "LOCALHOST (127.0.0.1)", "", LIGHTGRAY);
+        DrawButton({ (float)rightX + halfW + 16.0f, 274.0f, halfW, 38.0f }, "REDE LAN (192.168.1.x)", "", LIGHTGRAY);
 
         DrawButton({ (float)rightX, 330.0f, (float)colW, 58.0f },
                    net.clientConnected ? "CONECTADO AO HOST!" : "CONECTAR AO HOST",
                    "Assume automaticamente Bravo, Charlie ou Delta",
                    SKYBLUE, net.clientConnected);
 
-        // Instruções de Arquitetura LAN
         DrawRectangle(rightX, 408, colW, 149, Color{ 20, 26, 36, 230 });
         DrawRectangleLines(rightX, 408, colW, 149, Color{ 55, 70, 95, 255 });
         DrawText("COMO FUNCIONA O CO-OP LAN:", rightX + 16, 422, 16, GOLD);
@@ -401,9 +393,8 @@ private:
         (void)mouse;
         (void)click;
 
-        int leftX = 60;
-        int colW = 550;
-        int rightX = width - colW - 60;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
 
         for (int p = 1; p <= SaveSystem::MAX_PHASES; p++) {
             Rectangle phaseRect = { (float)leftX, 155.0f + (p - 1) * 92.0f, (float)colW, 78.0f };
@@ -448,7 +439,7 @@ private:
         }
 
         Rectangle backBtn = { (float)leftX, (float)height - 105.0f, 240.0f, 54.0f };
-        Rectangle launchBtn = { (float)width - 420.0f, (float)height - 105.0f, 360.0f, 54.0f };
+        Rectangle launchBtn = { (float)(rightX + colW - 360), (float)height - 105.0f, 360.0f, 54.0f };
 
         if (CheckCollisionPointRec(GetMousePosition(), backBtn) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             ReturnToMain();
@@ -467,13 +458,12 @@ private:
     }
 
     void DrawBriefingScreen(int width, int height, const SaveSystem& saveSystem) const {
-        int leftX = 60;
-        int colW = 550;
-        int rightX = width - colW - 60;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
 
         DrawText("BRIEFING TATICO & PERSONALIZACAO DE LOADOUT", leftX, 38, 28, RAYWHITE);
         DrawText("Configure o equipamento do Lider Alpha e selecione a operacao desbloqueada.", leftX, 74, 16, LIGHTGRAY);
-        DrawLine(leftX, 102, width - 60, 102, Color{ 55, 68, 90, 255 });
+        DrawLine(leftX, 102, width - leftX, 102, Color{ 55, 68, 90, 255 });
 
         DrawText("1. SELECIONE A FASE DA CAMPANHA:", leftX, 122, 18, SKYBLUE);
 
@@ -546,7 +536,7 @@ private:
         DrawButton({ (float)leftX, (float)height - 105.0f, 240.0f, 54.0f },
                    "VOLTAR [ESC]", "Menu Principal", LIGHTGRAY);
 
-        DrawButton({ (float)width - 420.0f, (float)height - 105.0f, 360.0f, 54.0f },
+        DrawButton({ (float)(rightX + colW - 360), (float)height - 105.0f, 360.0f, 54.0f },
                    "INICIAR OPERACAO [ENTER]",
                    TextFormat("Desdobrar na Fase 0%d", saveSystem.data.selectedPhase),
                    GREEN, true);
@@ -559,8 +549,10 @@ private:
         (void)mouse;
         (void)click;
 
-        int leftX = 70;
-        int sliderW = 540;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
+        int sliderW = colW;
+        int panelW = colW;
 
         if (IsKeyPressed(KEY_UP))   selectedSettingRow = (selectedSettingRow + 3) % 4;
         if (IsKeyPressed(KEY_DOWN)) selectedSettingRow = (selectedSettingRow + 1) % 4;
@@ -616,16 +608,15 @@ private:
             saveSystem.Save();
         }
 
-        int rightX = width - 540;
-        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 345.0f, 470.0f, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 345.0f, (float)panelW, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             saveSystem.Save();
             audio.PlayOrder();
         }
-        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 412.0f, 470.0f, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 412.0f, (float)panelW, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             saveSystem.ResetSettingsToDefault(audio);
             audio.PlayOrder();
         }
-        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 479.0f, 470.0f, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (CheckCollisionPointRec(GetMousePosition(), { (float)rightX, 479.0f, (float)panelW, 52.0f }) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             saveSystem.ResetAllProgress();
             audio.PlayDownedAlert();
         }
@@ -638,13 +629,14 @@ private:
     }
 
     void DrawSettingsScreen(int width, int height, const SaveSystem& saveSystem) const {
-        int leftX = 70;
-        int sliderW = 540;
-        int rightX = width - 540;
+        int leftX = 0, rightX = 0, colW = 0;
+        GetTwoColumnLayout(width, leftX, rightX, colW);
+        int sliderW = colW;
+        int panelW = colW;
 
         DrawText("CONFIGURACOES DE JOGO & SAVE PERSISTENTE", leftX, 38, 28, RAYWHITE);
         DrawText("Arraste os sliders ou use as setas do teclado. Todas as alteracoes sao salvas em savegame.cfg.", leftX, 74, 16, LIGHTGRAY);
-        DrawLine(leftX, 102, width - 70, 102, Color{ 55, 68, 90, 255 });
+        DrawLine(leftX, 102, width - leftX, 102, Color{ 55, 68, 90, 255 });
 
         struct SliderSpec {
             const char* label;
@@ -700,8 +692,8 @@ private:
             DrawRectangleLines((int)knobX - 7, (int)track.y - 5, 14, 24, BLACK);
         }
 
-        DrawRectangle(rightX, 148, 470, 178, Color{ 20, 26, 36, 235 });
-        DrawRectangleLines(rightX, 148, 470, 178, SKYBLUE);
+        DrawRectangle(rightX, 148, panelW, 178, Color{ 20, 26, 36, 235 });
+        DrawRectangleLines(rightX, 148, panelW, 178, SKYBLUE);
         DrawText("REGISTRO DO OPERADOR (savegame.cfg)", rightX + 18, 162, 17, SKYBLUE);
 
         DrawText(TextFormat("Fases Desbloqueadas: %d de %d", saveSystem.data.unlockedPhase, SaveSystem::MAX_PHASES),
@@ -713,13 +705,13 @@ private:
         DrawText(TextFormat("Total de Headshots: %d", saveSystem.data.totalHeadshots),
                  rightX + 18, 280, 16, GOLD);
 
-        DrawButton({ (float)rightX, 345.0f, 470.0f, 52.0f },
+        DrawButton({ (float)rightX, 345.0f, (float)panelW, 52.0f },
                    "SALVAR CONFIGURACOES AGORA", "Gravar manualmente em savegame.cfg", GREEN);
 
-        DrawButton({ (float)rightX, 412.0f, 470.0f, 52.0f },
+        DrawButton({ (float)rightX, 412.0f, (float)panelW, 52.0f },
                    "RESTAURAR CONFIGURACOES PADRAO", "Sensibilidade 0.0022, FOV 75, Volumes padrao", GOLD);
 
-        DrawButton({ (float)rightX, 479.0f, 470.0f, 52.0f },
+        DrawButton({ (float)rightX, 479.0f, (float)panelW, 52.0f },
                    "ZERAR PROGRESSO DA CAMPANHA", "Bloqueia fases 2-3 e zera estatisticas", RED);
 
         DrawButton({ (float)leftX, (float)height - 105.0f, 260.0f, 54.0f },

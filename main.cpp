@@ -12,7 +12,6 @@
 #include "Network.hpp"
 #include <type_traits>
 
-// Helpers C++17 para compatibilidade segura com campos internos de SquadAI.hpp e Objectives.hpp
 template <typename T, typename = void> struct HasShootTimer : std::false_type {};
 template <typename T> struct HasShootTimer<T, std::void_t<decltype(std::declval<T>().shootTimer)>> : std::true_type {};
 
@@ -208,9 +207,20 @@ WeaponStats GetWeaponStatsById(WeaponId id) {
 }
 
 int main() {
-    const int largura = 1280;
-    const int altura = 720;
-    InitWindow(largura, altura, "Squad Tactical Shooter - Multiplayer LAN UDP (SAVEPOINT_19)");
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
+    InitWindow(1280, 720, "Squad Tactical Shooter - Multiplayer LAN UDP (SAVEPOINT_19)");
+
+    // Auto-ajusta para a resolução nativa do monitor e ativa Tela Cheia
+    int monitor = GetCurrentMonitor();
+    int nativeW = GetMonitorWidth(monitor);
+    int nativeH = GetMonitorHeight(monitor);
+    if (nativeW > 0 && nativeH > 0) {
+        SetWindowSize(nativeW, nativeH);
+    }
+    if (!IsWindowFullscreen()) {
+        ToggleFullscreen();
+    }
+
     SetTargetFPS(144);
     SetExitKey(KEY_NULL);
 
@@ -259,6 +269,21 @@ int main() {
     camera.projection = CAMERA_PERSPECTIVE;
 
     while (!WindowShouldClose() && !shouldQuit) {
+        if (IsKeyPressed(KEY_F11)) {
+            if (IsWindowFullscreen()) {
+                ToggleFullscreen();
+                SetWindowSize(1280, 720);
+            } else {
+                int mon = GetCurrentMonitor();
+                int mw = GetMonitorWidth(mon);
+                int mh = GetMonitorHeight(mon);
+                if (mw > 0 && mh > 0) SetWindowSize(mw, mh);
+                ToggleFullscreen();
+            }
+        }
+
+        int largura = GetScreenWidth();
+        int altura = GetScreenHeight();
         float dt = std::min(GetFrameTime(), 0.05f);
         animTime += dt;
 
@@ -325,7 +350,7 @@ int main() {
                     : TextFormat("[M] Audio 3D: ON (%d SFX / %d Musicas)", audio.externalSfxCount, audio.externalMusicCount);
                 DrawText(audioTag, 24, 16, 14, audio.muted ? RED : GREEN);
 
-                const char* assetTag = TextFormat("[F7] Modelos .glb: %d/%d", assets.loadedCount, assets.totalSlots);
+                const char* assetTag = TextFormat("[F11] Tela Cheia  |  [F7] .glb: %d/%d (%dx%d)", assets.loadedCount, assets.totalSlots, largura, altura);
                 DrawText(assetTag, largura - MeasureText(assetTag, 14) - 24, 16, 14, (assets.loadedCount > 0) ? SKYBLUE : LIGHTGRAY);
             EndDrawing();
             continue;
@@ -877,7 +902,6 @@ int main() {
                     UpdateAllies(dt, allies, enemies, player, currentOrder, world, tracers, tacticalPing);
 
                     if (net.IsHost()) {
-                        // Remove eventuais tiros disparados por IA em slots controlados por humanos
                         for (size_t t = prevTracers; t < tracers.size(); ) {
                             bool fromHuman = false;
                             for (int idx = 0; idx < 3 && idx < (int)allies.size(); idx++) {
@@ -1037,7 +1061,6 @@ int main() {
             }
             snap.connectedMask = mask;
 
-            // Slot 0: Host (Alpha)
             snap.squad[0].posX = player.pos.x;
             snap.squad[0].posY = player.pos.y;
             snap.squad[0].posZ = player.pos.z;
@@ -1053,7 +1076,6 @@ int main() {
                                 | (player.isCrouched ? (1 << 1) : 0)
                                 | (player.isDowned ? (1 << 2) : 0);
 
-            // Slots 1..3: Bravo, Charlie, Delta
             for (int s = 1; s <= 3 && (s - 1) < (int)allies.size(); s++) {
                 const SquadAlly& a = allies[s - 1];
                 snap.squad[s].posX = a.pos.x;
@@ -1071,7 +1093,6 @@ int main() {
                                     | (a.hasPingOrder ? (1 << 4) : 0);
             }
 
-            // Inimigos
             int eCount = std::min((int)enemies.size(), NetWorldSnapshotPacket::MAX_ENEMIES);
             snap.enemyCount = (uint8_t)eCount;
             for (int i = 0; i < eCount; i++) {
@@ -1087,7 +1108,6 @@ int main() {
                                       | (enemies[i].isSuppressed ? (1 << 1) : 0);
             }
 
-            // Terminais e Barris
             int tCount = std::min((int)mission.terminals.size(), NetWorldSnapshotPacket::MAX_TERMINALS);
             snap.terminalCount = (uint8_t)tCount;
             for (int i = 0; i < tCount; i++) {
@@ -1102,7 +1122,6 @@ int main() {
                 snap.barrels[i].exploded = mission.barrels[i].exploded ? 1 : 0;
             }
 
-            // Eventos recentes (tiros e explosões)
             int evCount = std::min((int)net.outgoingEvents.size(), NetWorldSnapshotPacket::MAX_EVENTS);
             snap.eventCount = (uint8_t)evCount;
             for (int i = 0; i < evCount; i++) {
@@ -1338,7 +1357,7 @@ int main() {
                     DrawText(TextFormat("Estado: %s | %s", postura, arStatus), 20, 68, 16, GOLD);
 
                     DrawText(TextFormat("VELOCIDADE: %.0f u/s", unitsPerSec), cx - 120, altura - 115, 26, speedColor);
-                    DrawText("1-5: Armas | Shift: Correr | F5: Reiniciar | F6: Cutscene | F7: Reload | ESC: Menu",
+                    DrawText("1-5: Armas | Shift: Correr | F5: Reiniciar | F6: Cutscene | F7: Reload | F11: Tela Cheia | ESC: Menu",
                              20, altura - 26, 14, LIGHTGRAY);
                 } else {
                     if (tacticalPing.type == PingType::MOVE_COVER && !allies.empty()) {
@@ -1486,7 +1505,7 @@ int main() {
                     DrawText(TextFormat("[M] Som: %s | Trilha: %.0f%%", audio.muted ? "MUDO" : "3D ON", audio.musicTension * 100.0f),
                              cmdX, 134, 14, audio.muted ? RED : (audio.musicTension > 0.55f ? ORANGE : GREEN));
 
-                    DrawText("1-5: Armas | F1-F3: Ordens | E/F: Interagir | F5: Reiniciar | F8: Triggers | ESC: Menu",
+                    DrawText("1-5: Armas | F1-F3: Ordens | E/F: Interagir | F5: Reiniciar | F11: Tela Cheia | ESC: Menu",
                              20, altura - 26, 13, LIGHTGRAY);
                 }
 

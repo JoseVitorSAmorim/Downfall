@@ -13,6 +13,7 @@
 #include "Events.hpp"
 #include "Combatant.hpp"
 #include <type_traits>
+#include <fstream>
 
 template <typename T, typename = void> struct HasShootTimer : std::false_type {};
 template <typename T> struct HasShootTimer<T, std::void_t<decltype(std::declval<T>().shootTimer)>> : std::true_type {};
@@ -88,6 +89,15 @@ Vector3 GetSquadSpawnPosition(int slot) {
         case 3:  return {  9.0f, 0.0f, -2.0f }; // Delta
         default: return {  0.0f, 0.5f, 14.0f };
     }
+}
+
+Vector3 GetSceneSquadSpawnPosition(const SceneData& scene, int slot) {
+    for (const auto& ent : scene.entities) {
+        if (ent.type == SceneEntityType::SPAWN_ALLY && ent.paramA == slot) {
+            return ent.pos;
+        }
+    }
+    return GetSquadSpawnPosition(slot);
 }
 
 // =============================================================================
@@ -193,8 +203,8 @@ void RegisterCoreEventListeners(ProceduralAudio& audio, SaveSystem& saveSystem,
     });
 }
 
-void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePlayer& player,
-                        ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
+void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SceneData& currentScene,
+                        SourcePlayer& player, ViewmodelWeapon& weapon, std::vector<SquadAlly>& allies,
                         SquadRoster& roster,
                         std::vector<EnemyBot>& enemies, std::vector<Tracer>& tracers,
                         std::vector<ThrownGrenade>& grenades, std::vector<ExplosionEffect>& explosions,
@@ -219,64 +229,98 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     tacticalPing.Clear();
     hitmarker.timer = 0.0f;
 
+    int phase = net.IsClient() && net.hasSnapshot ? (int)net.latestSnapshot.phase : saveSystem.data.selectedPhase;
+
     if (mode == GameMode::MOVEMENT_TEST) {
-        world = LevelLoader::LoadFromFile("mapa_movimento.txt", MapPreset::MOVEMENT_COURSE);
-        player.pos = { 0.0f, 0.5f, 20.0f };
+        currentScene = LevelLoader::LoadSceneFromFile("mapa_movimento.txt", MapPreset::MOVEMENT_COURSE);
+        world = currentScene.blocks;
+        player.pos = GetSceneSquadSpawnPosition(currentScene, 0);
+        if (Vector3Distance(player.pos, GetSquadSpawnPosition(0)) < 0.01f) {
+            player.pos = { 0.0f, 0.5f, 20.0f };
+        }
         player.yaw = PI;
-        mission.SetupForMode(false, false);
+        mission.LoadFromScene(currentScene, false, false);
+        cutscenes.SetupFromScene(currentScene, false, player.GetEyePosition(), Vector3Add(player.GetEyePosition(), player.GetForward3D()));
     } else if (mode == GameMode::SUPPRESSION_RANGE) {
-        world = LevelLoader::LoadFromFile("mapa_treino.txt", MapPreset::FIRING_RANGE);
-        player.pos = { 0.0f, 0.5f, 14.0f };
-        allies = {
-            { 1, "Bravo",   { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, { -4.5f, 0.0f, 6.5f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
-            { 2, "Charlie", {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, {  4.5f, 0.0f, 6.5f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME }
-        };
-        ResetWave(enemies);
-        mission.SetupForMode(false, true);
+        currentScene = LevelLoader::LoadSceneFromFile("mapa_treino.txt", MapPreset::FIRING_RANGE);
+        world = currentScene.blocks;
+        player.pos = GetSceneSquadSpawnPosition(currentScene, 0);
+
+        const char* names[4] = { "Alpha", "Bravo", "Charlie", "Delta" };
+        Color colors[4] = { WHITE, SKYBLUE, LIME, GOLD };
+        int allyIdx = 1;
+        for (const auto& ent : currentScene.entities) {
+            if (ent.type == SceneEntityType::SPAWN_ALLY && ent.paramA >= 1 && ent.paramA <= 3) {
+                Vector3 sp = { ent.pos.x, 0.0f, ent.pos.z };
+                allies.push_back({ allyIdx++, names[ent.paramA], sp, sp, sp, 100.0f, 50.0f, 0.4f * allyIdx, (float)allyIdx, colors[ent.paramA] });
+            }
+        }
+
+        int enemyId = 1;
+        for (const auto& ent : currentScene.entities) {
+            if (ent.type == SceneEntityType::SPAWN_ENEMY && ent.paramB == 0) {
+                Vector3 ep = { ent.pos.x, 0.0f, ent.pos.z };
+                enemies.push_back({ enemyId++, ep, ep, 100.0f, 100.0f, 0.7f, (float)enemyId * 0.4f, 0.0f, false, -1 });
+            }
+        }
+        if (enemies.empty()) ResetWave(enemies);
+
+        mission.LoadFromScene(currentScene, false, true);
+        cutscenes.SetupFromScene(currentScene, false, player.GetEyePosition(), Vector3Add(player.GetEyePosition(), player.GetForward3D()));
     } else {
         isTacticalMission = true;
-        world = LevelLoader::LoadFromFile("mapa_squad.txt", MapPreset::SQUAD_ARENA);
 
-        if (net.IsClient()) {
-            player.pos = GetSquadSpawnPosition(net.localSlot);
-            player.pos.y = 0.5f;
+        // Suporta mapa_custom.scene se existir e fase customizada ou carrega mapa_squad.txt
+        std::string sceneFile = "mapa_squad.txt";
+        {
+            std::ifstream customCheck("mapa_custom.scene");
+            if (customCheck.good() && phase == 4) {
+                sceneFile = "mapa_custom.scene";
+            }
+        }
 
-            const char* names[4] = { "Alpha", "Bravo", "Charlie", "Delta" };
-            Color colors[4] = { WHITE, SKYBLUE, LIME, GOLD };
-            int allyIdx = 1;
-            for (int s = 0; s < 4; s++) {
-                if (s == net.localSlot) continue;
+        currentScene = LevelLoader::LoadSceneFromFile(sceneFile, MapPreset::SQUAD_ARENA);
+        world = currentScene.blocks;
+
+        int localSlot = net.IsClient() ? net.localSlot : 0;
+        player.pos = GetSceneSquadSpawnPosition(currentScene, localSlot);
+        player.pos.y = 0.5f;
+
+        const char* names[4] = { "Alpha", "Bravo", "Charlie", "Delta" };
+        Color colors[4] = { WHITE, SKYBLUE, LIME, GOLD };
+        int allyIdx = 1;
+        for (int s = 0; s < 4; s++) {
+            if (s == localSlot) continue;
+            bool foundSlot = false;
+            for (const auto& ent : currentScene.entities) {
+                if (ent.type == SceneEntityType::SPAWN_ALLY && ent.paramA == s) {
+                    Vector3 sp = { ent.pos.x, 0.0f, ent.pos.z };
+                    allies.push_back({ allyIdx++, names[s], sp, sp, sp, 100.0f, 50.0f, 0.4f * allyIdx, (float)allyIdx * 1.4f, colors[s] });
+                    foundSlot = true;
+                    break;
+                }
+            }
+            if (!foundSlot && net.IsClient()) {
                 Vector3 sp = GetSquadSpawnPosition(s);
                 sp.y = 0.0f;
                 allies.push_back({ allyIdx++, names[s], sp, sp, sp, 100.0f, 50.0f, 0.5f, 0.0f, colors[s] });
             }
-        } else {
-            player.pos = { 0.0f, 0.5f, 14.0f };
-            allies = {
-                { 1, "Bravo",   { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, { -5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.4f, 0.0f, SKYBLUE },
-                { 2, "Charlie", {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, {  5.5f, 0.0f,  4.0f }, 100.0f, 50.0f, 0.9f, 2.1f, LIME },
-                { 3, "Delta",   {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, {  9.0f, 0.0f, -2.0f }, 100.0f, 50.0f, 1.3f, 4.2f, GOLD }
-            };
         }
 
-        ResetWave(enemies);
+        int enemyId = 1;
+        for (const auto& ent : currentScene.entities) {
+            if (ent.type != SceneEntityType::SPAWN_ENEMY || ent.paramB != 0) continue;
+            int minPh = std::max(1, ent.paramA);
+            if (phase < minPh) continue;
 
-        int phase = net.IsClient() && net.hasSnapshot ? (int)net.latestSnapshot.phase : saveSystem.data.selectedPhase;
-        if (phase >= 2) {
-            int nextId = (int)enemies.size() + 1;
-            enemies.push_back({ nextId++, { -11.5f, 0.0f, -6.5f }, { -11.5f, 0.0f, -6.5f }, 110.0f, 110.0f, 0.7f, 0.5f, 0.0f, false, -1 });
-            enemies.push_back({ nextId++, {  11.5f, 0.0f, -6.5f }, {  11.5f, 0.0f, -6.5f }, 110.0f, 110.0f, 0.9f, 1.5f, 0.0f, false, -1 });
+            float baseHp = (minPh >= 3) ? 140.0f : ((minPh == 2) ? 110.0f : 100.0f);
+            if (phase >= 3) baseHp += 25.0f;
+            Vector3 ep = { ent.pos.x, 0.0f, ent.pos.z };
+            enemies.push_back({ enemyId++, ep, ep, baseHp, baseHp, 0.75f, (float)enemyId * 0.45f, 0.0f, false, -1 });
         }
-        if (phase >= 3) {
-            int nextId = (int)enemies.size() + 1;
-            enemies.push_back({ nextId++, { 0.0f, 0.0f, -15.5f }, { 0.0f, 0.0f, -15.5f }, 140.0f, 140.0f, 0.6f, 2.2f, 0.0f, false, -1 });
-            for (auto& e : enemies) {
-                e.maxHp += 25.0f;
-                e.hp = e.maxHp;
-            }
-        }
+        if (enemies.empty()) ResetWave(enemies);
 
-        mission.SetupForMode(true, false);
+        mission.LoadFromScene(currentScene, true, false);
     }
 
     weapon.restrictToLoadout = isTacticalMission;
@@ -290,8 +334,11 @@ void InitializeTestMode(GameMode mode, std::vector<WorldBlock>& world, SourcePla
     camera.target = target;
     camera.fovy = saveSystem.data.baseFov;
 
-    bool playIntroCutscene = (mode != GameMode::MOVEMENT_TEST && mode != GameMode::SUPPRESSION_RANGE && !net.IsActive());
-    cutscenes.SetupForMode(playIntroCutscene, eye, target);
+    if (isTacticalMission) {
+        cutscenes.SetupFromScene(currentScene, true, eye, target);
+    }
+
+    bool playIntroCutscene = (isTacticalMission && !net.IsActive());
     if (playIntroCutscene) {
         cutscenes.Play(0, eye, target, saveSystem.data.baseFov, audio);
     }
@@ -311,7 +358,7 @@ WeaponStats GetWeaponStatsById(WeaponId id) {
 
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
-    InitWindow(1280, 720, "Squad Tactical Shooter - Event Bus & Unified Combatant (SAVEPOINT_22)");
+    InitWindow(1280, 720, "Squad Tactical Shooter - Data-Driven Scene Serialization (SAVEPOINT_23)");
 
     int monitor = GetCurrentMonitor();
     int nativeW = GetMonitorWidth(monitor);
@@ -345,6 +392,7 @@ int main() {
     bool victoryRecordedForRun = false;
     uint32_t hostSnapshotTick = 0;
 
+    SceneData currentScene;
     std::vector<WorldBlock> world;
     SourcePlayer player;
     ViewmodelWeapon weapon;
@@ -366,7 +414,6 @@ int main() {
     float playerStepTimer = 0.0f;
     float botStepTimer = 0.0f;
 
-    // Registra todos os subsistemas no barramento de eventos
     RegisterCoreEventListeners(audio, saveSystem, mission, hitmarker, damageIndicators, net);
 
     Camera3D camera = {};
@@ -444,7 +491,7 @@ int main() {
                 currentMode = chosen;
                 victoryRecordedForRun = false;
                 hostSnapshotTick = 0;
-                InitializeTestMode(currentMode, world, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
+                InitializeTestMode(currentMode, world, currentScene, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
                 menu.ReturnToMain();
                 DisableCursor();
             }
@@ -463,7 +510,7 @@ int main() {
         }
 
         // =====================================================================
-        // ESTADO 2: EDITOR DE MAPAS IN-GAME
+        // ESTADO 2: EDITOR DE MAPAS & ENTIDADES IN-GAME (.SCENE / .TXT)
         // =====================================================================
         if (currentMode == GameMode::MAP_EDITOR) {
             audio.UpdateDynamicMusic(dt, 0.0f, false);
@@ -487,7 +534,7 @@ int main() {
         }
 
         // =====================================================================
-        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D (EVENT-DRIVEN + ROSTER UNIFICADO)
+        // ESTADO 3: MODOS DE TESTE E MISSÃO EM 3D (DATA-DRIVEN + EVENT-DRIVEN)
         // =====================================================================
         if (IsKeyPressed(KEY_ESCAPE)) {
             cutscenes.Skip();
@@ -502,7 +549,7 @@ int main() {
 
         if (IsKeyPressed(KEY_F5) && !net.IsClient()) {
             victoryRecordedForRun = false;
-            InitializeTestMode(currentMode, world, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
+            InitializeTestMode(currentMode, world, currentScene, player, weapon, allies, roster, enemies, tracers, grenades, explosions, damageIndicators, currentOrder, tacticalPing, hitmarker, mission, cutscenes, camera, audio, saveSystem, net);
         }
 
         if (IsKeyPressed(KEY_F6) && !cutscenes.IsPlaying() && !net.IsActive()) {
@@ -521,7 +568,6 @@ int main() {
             audio.PlayOrder();
         }
 
-        // Dispara evento de conclusão de missão para SaveSystem e Áudio
         if (mission.state == MissionState::VICTORY && !victoryRecordedForRun) {
             victoryRecordedForRun = true;
             EventManager::Emit(ObjectiveCompletedEvent{
@@ -598,9 +644,8 @@ int main() {
             }
 
             if (player.pos.y < -20.0f) {
-                player.pos = (currentMode == GameMode::MOVEMENT_TEST)
-                    ? Vector3{ 0.0f, 0.5f, 20.0f }
-                    : GetSquadSpawnPosition(localSlot);
+                player.pos = GetSceneSquadSpawnPosition(currentScene, localSlot);
+                player.pos.y = 0.5f;
                 player.vel = { 0.0f, 0.0f, 0.0f };
             }
 
@@ -747,7 +792,6 @@ int main() {
                     }
                 }
 
-                // Arrasto e Reanimação Unificados via SquadRoster
                 roster.SyncFromEntities(player, weapon, allies, 0);
                 if (!player.isDowned && !allies.empty()) {
                     if (IsKeyDown(KEY_E)) {

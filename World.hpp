@@ -20,6 +20,87 @@ enum class SlopeDir : int {
     NEG_Z = 4  // Sobe na direção -Z
 };
 
+enum class MapPreset {
+    SQUAD_ARENA = 0,
+    MOVEMENT_COURSE,
+    FIRING_RANGE
+};
+
+// =============================================================================
+// ENTIDADES JOGÁVEIS SERIALIZÁVEIS (SAVEPOINT_23 - DATA-DRIVEN SCENE)
+// =============================================================================
+enum class SceneEntityType : int {
+    SPAWN_ALLY  = 0, // paramA: slot (0=Alpha, 1=Bravo, 2=Charlie, 3=Delta)
+    SPAWN_ENEMY = 1, // paramA: minPhase (1..3), paramB: isReinforcement (0 ou 1)
+    TERMINAL    = 2, // paramA: terminalId (1, 2, ...)
+    BARREL      = 3, // Barril explosivo
+    CRATE       = 4, // Caixa de suprimentos
+    EXTRACT     = 5, // size.x = raio da zona de extração
+    TRIGGER     = 6  // size = dimensões da caixa AABB, paramA = cutsceneId, paramB = requiresExtract (0/1)
+};
+
+struct SceneEntityMarker {
+    SceneEntityType type = SceneEntityType::BARREL;
+    Vector3 pos = { 0.0f, 0.0f, 0.0f };
+    Vector3 size = { 1.0f, 1.0f, 1.0f };
+    int paramA = 0;
+    int paramB = 0;
+    std::string tag = "";
+
+    BoundingBox GetAABB() const noexcept {
+        if (type == SceneEntityType::TRIGGER) {
+            Vector3 half = { size.x * 0.5f, size.y * 0.5f, size.z * 0.5f };
+            return {
+                { pos.x - half.x, pos.y - half.y, pos.z - half.z },
+                { pos.x + half.x, pos.y + half.y, pos.z + half.z }
+            };
+        }
+        float r = (type == SceneEntityType::EXTRACT) ? std::max(0.6f, size.x) : 0.55f;
+        float h = (type == SceneEntityType::EXTRACT) ? 0.35f : 1.35f;
+        return {
+            { pos.x - r, pos.y, pos.z - r },
+            { pos.x + r, pos.y + h, pos.z + r }
+        };
+    }
+};
+
+inline const char* SceneEntityTypeToToken(SceneEntityType type) noexcept {
+    switch (type) {
+        case SceneEntityType::SPAWN_ALLY:  return "SPAWN_ALLY";
+        case SceneEntityType::SPAWN_ENEMY: return "SPAWN_ENEMY";
+        case SceneEntityType::TERMINAL:    return "TERMINAL";
+        case SceneEntityType::BARREL:      return "BARREL";
+        case SceneEntityType::CRATE:       return "CRATE";
+        case SceneEntityType::EXTRACT:     return "EXTRACT";
+        case SceneEntityType::TRIGGER:     return "TRIGGER";
+        default:                           return "BARREL";
+    }
+}
+
+inline bool TryParseSceneEntityToken(const std::string& token, SceneEntityType& outType) noexcept {
+    if (token == "SPAWN_ALLY")  { outType = SceneEntityType::SPAWN_ALLY;  return true; }
+    if (token == "SPAWN_ENEMY") { outType = SceneEntityType::SPAWN_ENEMY; return true; }
+    if (token == "TERMINAL")    { outType = SceneEntityType::TERMINAL;    return true; }
+    if (token == "BARREL")      { outType = SceneEntityType::BARREL;      return true; }
+    if (token == "CRATE")       { outType = SceneEntityType::CRATE;       return true; }
+    if (token == "EXTRACT")     { outType = SceneEntityType::EXTRACT;     return true; }
+    if (token == "TRIGGER")     { outType = SceneEntityType::TRIGGER;     return true; }
+    return false;
+}
+
+inline Color GetSceneEntityColor(SceneEntityType type) noexcept {
+    switch (type) {
+        case SceneEntityType::SPAWN_ALLY:  return SKYBLUE;
+        case SceneEntityType::SPAWN_ENEMY: return RED;
+        case SceneEntityType::TERMINAL:    return { 45, 185, 255, 255 };
+        case SceneEntityType::BARREL:      return ORANGE;
+        case SceneEntityType::CRATE:       return LIME;
+        case SceneEntityType::EXTRACT:     return GREEN;
+        case SceneEntityType::TRIGGER:     return GOLD;
+        default:                           return WHITE;
+    }
+}
+
 struct WorldBlock {
     Vector3 pos = { 0.0f, 0.0f, 0.0f };
     Vector3 size = { 1.0f, 1.0f, 1.0f };
@@ -98,8 +179,12 @@ struct WorldBlock {
     }
 };
 
+struct SceneData {
+    std::vector<WorldBlock> blocks;
+    std::vector<SceneEntityMarker> entities;
+};
+
 inline void DrawWorldBlock(const WorldBlock& block) {
-    // Coberturas e blocos comuns são sempre renderizados como cubos retangulares
     if (!block.IsSlope()) {
         DrawCubeV(block.pos, block.size, block.color);
         DrawCubeWiresV(block.pos, block.size, BLACK);
@@ -180,12 +265,6 @@ struct Tracer {
     Vector3 end;
     Color color;
     float timer;
-};
-
-enum class MapPreset {
-    SQUAD_ARENA = 0,
-    MOVEMENT_COURSE,
-    FIRING_RANGE
 };
 
 inline bool CheckOverlapStrict(const BoundingBox& a, const BoundingBox& b) noexcept {
@@ -502,11 +581,118 @@ inline bool HasLineOfSight(Vector3 from, Vector3 to, const std::vector<WorldBloc
 }
 
 // =============================================================================
-// CARREGADOR DE MAPAS & GERADOR DE PRESETS
+// SERIALIZADOR & CARREGADOR DE CENÁRIOS DATA-DRIVEN (.scene / .txt)
 // =============================================================================
 class LevelLoader {
 public:
-    static std::vector<WorldBlock> LoadFromFile(const std::string& filename, MapPreset preset) {
+    static std::vector<SceneEntityMarker> BuildDefaultEntitiesForPreset(MapPreset preset) {
+        std::vector<SceneEntityMarker> ents;
+
+        if (preset == MapPreset::MOVEMENT_COURSE) {
+            ents.push_back({ SceneEntityType::SPAWN_ALLY, { 0.0f, 0.5f, 20.0f }, { 1.0f, 1.0f, 1.0f }, 0, 0, "Alpha_Start" });
+            return ents;
+        }
+
+        if (preset == MapPreset::FIRING_RANGE) {
+            ents.push_back({ SceneEntityType::SPAWN_ALLY,  {  0.0f, 0.5f, 14.0f }, { 1.0f, 1.0f, 1.0f }, 0, 0, "Alpha" });
+            ents.push_back({ SceneEntityType::SPAWN_ALLY,  { -4.5f, 0.0f,  6.5f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Bravo" });
+            ents.push_back({ SceneEntityType::SPAWN_ALLY,  {  4.5f, 0.0f,  6.5f }, { 1.0f, 1.0f, 1.0f }, 2, 0, "Charlie" });
+
+            ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -8.0f, 0.0f, -12.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Alvo_Oeste" });
+            ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -2.8f, 0.0f, -15.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Alvo_Centro_Oeste" });
+            ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  2.8f, 0.0f, -15.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Alvo_Centro_Leste" });
+            ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  8.0f, 0.0f, -12.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Alvo_Leste" });
+
+            ents.push_back({ SceneEntityType::CRATE,  { -7.5f, 0.0f,   9.5f }, { 1.15f, 0.80f, 0.75f }, 0, 0, "Suprimento_Oeste" });
+            ents.push_back({ SceneEntityType::CRATE,  {  7.5f, 0.0f,   9.5f }, { 1.15f, 0.80f, 0.75f }, 0, 0, "Suprimento_Leste" });
+            ents.push_back({ SceneEntityType::BARREL, { -3.2f, 0.0f, -13.5f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_01" });
+            ents.push_back({ SceneEntityType::BARREL, {  4.2f, 0.0f, -13.5f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_02" });
+            ents.push_back({ SceneEntityType::BARREL, { -9.5f, 0.0f,  -8.0f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_03" });
+            ents.push_back({ SceneEntityType::BARREL, {  9.5f, 0.0f,  -8.0f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_04" });
+            return ents;
+        }
+
+        // MapPreset::SQUAD_ARENA (Campanha Tática Completa)
+        ents.push_back({ SceneEntityType::SPAWN_ALLY,  {  0.0f, 0.5f, 14.0f }, { 1.0f, 1.0f, 1.0f }, 0, 0, "Alpha" });
+        ents.push_back({ SceneEntityType::SPAWN_ALLY,  { -5.5f, 0.0f,  4.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Bravo" });
+        ents.push_back({ SceneEntityType::SPAWN_ALLY,  {  5.5f, 0.0f,  4.0f }, { 1.0f, 1.0f, 1.0f }, 2, 0, "Charlie" });
+        ents.push_back({ SceneEntityType::SPAWN_ALLY,  {  9.0f, 0.0f, -2.0f }, { 1.0f, 1.0f, 1.0f }, 3, 0, "Delta" });
+
+        // Hostis iniciais (Fase 1+)
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -8.0f, 0.0f, -12.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Sentinela_Oeste" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -2.8f, 0.0f, -15.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Guarda_Centro_A" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  2.8f, 0.0f, -15.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Guarda_Centro_B" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  8.0f, 0.0f, -12.0f }, { 1.0f, 1.0f, 1.0f }, 1, 0, "Sentinela_Leste" });
+
+        // Hostis escalonados (Fases 2 e 3)
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -11.5f, 0.0f,  -6.5f }, { 1.0f, 1.0f, 1.0f }, 2, 0, "Flanco_Oeste_F2" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  11.5f, 0.0f,  -6.5f }, { 1.0f, 1.0f, 1.0f }, 2, 0, "Flanco_Leste_F2" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, {   0.0f, 0.0f, -15.5f }, { 1.0f, 1.0f, 1.0f }, 3, 0, "Comandante_F3" });
+
+        // Reforços pós-hack (paramB = 1)
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, { -11.0f, 0.0f, -19.0f }, { 1.0f, 1.0f, 1.0f }, 1, 1, "Reforco_Oeste" });
+        ents.push_back({ SceneEntityType::SPAWN_ENEMY, {  11.0f, 0.0f, -19.0f }, { 1.0f, 1.0f, 1.0f }, 1, 1, "Reforco_Leste" });
+
+        // Objetivos e Suprimentos
+        ents.push_back({ SceneEntityType::TERMINAL, { -13.0f, 0.0f, -4.8f }, { 0.75f, 1.30f, 0.55f }, 1, 0, "Terminal_Alpha_(Oeste)" });
+        ents.push_back({ SceneEntityType::TERMINAL, {  13.0f, 0.0f, -4.8f }, { 0.75f, 1.30f, 0.55f }, 2, 0, "Terminal_Bravo_(Leste)" });
+
+        ents.push_back({ SceneEntityType::CRATE,  { -7.5f, 0.0f,   9.5f }, { 1.15f, 0.80f, 0.75f }, 0, 0, "Suprimento_Oeste" });
+        ents.push_back({ SceneEntityType::CRATE,  {  7.5f, 0.0f,   9.5f }, { 1.15f, 0.80f, 0.75f }, 0, 0, "Suprimento_Leste" });
+
+        ents.push_back({ SceneEntityType::BARREL, { -3.2f, 0.0f, -13.5f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_Central_A" });
+        ents.push_back({ SceneEntityType::BARREL, {  4.2f, 0.0f, -13.5f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_Central_B" });
+        ents.push_back({ SceneEntityType::BARREL, { -9.5f, 0.0f,  -8.0f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_Flanco_Oeste" });
+        ents.push_back({ SceneEntityType::BARREL, {  9.5f, 0.0f,  -8.0f }, { 0.78f, 1.25f, 0.78f }, 0, 0, "Barril_Flanco_Leste" });
+
+        ents.push_back({ SceneEntityType::EXTRACT, { 0.0f, 0.0f, 16.5f }, { 3.2f, 0.2f, 3.2f }, 0, 0, "Zona_Extracao" });
+
+        // Gatilhos de Cutscene (pos = centro, size = dimensões, paramA = cutsceneId, paramB = requiresExtractionActive)
+        ents.push_back({ SceneEntityType::TRIGGER, { 0.0f, 2.0f,  3.5f }, { 28.0f, 4.0f, 4.0f }, 1, 0, "TRIGGER:_PATIO_CENTRAL" });
+        ents.push_back({ SceneEntityType::TRIGGER, { 0.0f, 2.0f, 12.6f }, { 20.0f, 4.0f, 3.2f }, 2, 1, "TRIGGER:_EXTRACAO" });
+
+        return ents;
+    }
+
+    static bool SaveSceneToFile(const std::string& filename, const SceneData& scene) {
+        std::ofstream out(filename);
+        if (!out.is_open()) return false;
+
+        out << "# ==========================================================================\n";
+        out << "# CENARIO DATA-DRIVEN (SAVEPOINT_23)\n";
+        out << "# BLOCK posX posY posZ tamX tamY tamZ R G B [SLOPE 1..4]\n";
+        out << "# ENTITY_TYPE posX posY posZ sizeX sizeY sizeZ paramA paramB tag_sem_espacos\n";
+        out << "# ==========================================================================\n\n";
+
+        for (const auto& b : scene.blocks) {
+            out << "BLOCK "
+                << b.pos.x << " " << b.pos.y << " " << b.pos.z << " "
+                << b.size.x << " " << b.size.y << " " << b.size.z << " "
+                << (int)b.color.r << " " << (int)b.color.g << " " << (int)b.color.b;
+            if (b.IsSlope()) {
+                out << " SLOPE " << b.slopeDir;
+            }
+            out << "\n";
+        }
+
+        if (!scene.entities.empty()) {
+            out << "\n# ENTIDADES JOGAVEIS E GATILHOS\n";
+        }
+
+        for (const auto& e : scene.entities) {
+            std::string safeTag = e.tag.empty() ? "Entidade" : e.tag;
+            std::replace(safeTag.begin(), safeTag.end(), ' ', '_');
+            out << SceneEntityTypeToToken(e.type) << " "
+                << e.pos.x << " " << e.pos.y << " " << e.pos.z << " "
+                << e.size.x << " " << e.size.y << " " << e.size.z << " "
+                << e.paramA << " " << e.paramB << " "
+                << safeTag << "\n";
+        }
+
+        return true;
+    }
+
+    static SceneData LoadSceneFromFile(const std::string& filename, MapPreset preset) {
         std::ifstream testFile(filename);
         if (!testFile.is_open()) {
             GeneratePresetFile(filename, preset);
@@ -514,21 +700,52 @@ public:
             testFile.close();
         }
 
-        std::vector<WorldBlock> blocks;
+        SceneData scene;
         std::ifstream file(filename);
-        if (!file.is_open()) return blocks;
+        if (!file.is_open()) return scene;
 
+        bool hasAnyTypedEntityLine = false;
         std::string line;
+
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
             std::istringstream iss(line);
+            std::string firstToken;
+            if (!(iss >> firstToken)) continue;
+
+            SceneEntityType entType;
+            if (TryParseSceneEntityToken(firstToken, entType)) {
+                hasAnyTypedEntityLine = true;
+                SceneEntityMarker m{};
+                m.type = entType;
+                if (iss >> m.pos.x >> m.pos.y >> m.pos.z >> m.size.x >> m.size.y >> m.size.z) {
+                    if (!(iss >> m.paramA)) m.paramA = 0;
+                    if (!(iss >> m.paramB)) m.paramB = 0;
+                    std::string rawTag;
+                    if (iss >> rawTag) {
+                        std::replace(rawTag.begin(), rawTag.end(), '_', ' ');
+                        m.tag = rawTag;
+                    }
+                    scene.entities.push_back(m);
+                }
+                continue;
+            }
+
+            // Suporta tanto formato novo ("BLOCK x y z ...") quanto legado ("x y z ...")
+            std::istringstream blockStream;
+            if (firstToken == "BLOCK") {
+                blockStream.str(line.substr(5));
+            } else {
+                blockStream.str(line);
+            }
+
             WorldBlock b{};
             b.slopeDir = 0;
             int r = 120, g = 125, bl = 135;
-            if (iss >> b.pos.x >> b.pos.y >> b.pos.z >> b.size.x >> b.size.y >> b.size.z >> r >> g >> bl) {
+            if (blockStream >> b.pos.x >> b.pos.y >> b.pos.z >> b.size.x >> b.size.y >> b.size.z >> r >> g >> bl) {
                 std::string extraTag;
                 int slopeVal = 0;
-                if ((iss >> extraTag) && (extraTag == "SLOPE" || extraTag == "RAMP") && (iss >> slopeVal)) {
+                if ((blockStream >> extraTag) && (extraTag == "SLOPE" || extraTag == "RAMP") && (blockStream >> slopeVal)) {
                     b.slopeDir = std::clamp(slopeVal, 1, 4);
                 }
                 b.color = {
@@ -538,49 +755,69 @@ public:
                     255
                 };
                 b.bounds = b.ComputeBounds();
-                blocks.push_back(b);
+                scene.blocks.push_back(b);
             }
         }
-        return blocks;
+
+        // Retrocompatibilidade: se o arquivo de mapa era antigo (só blocos), injeta as entidades padrão do preset
+        if (!hasAnyTypedEntityLine && scene.entities.empty()) {
+            scene.entities = BuildDefaultEntitiesForPreset(preset);
+        }
+
+        return scene;
+    }
+
+    static std::vector<WorldBlock> LoadFromFile(const std::string& filename, MapPreset preset) {
+        return LoadSceneFromFile(filename, preset).blocks;
     }
 
     static void GeneratePresetFile(const std::string& filename, MapPreset preset) {
-        std::ofstream out(filename);
-        if (!out.is_open()) return;
+        SceneData scene;
+        auto addBlk = [&](Vector3 pos, Vector3 size, Color col, int slope = 0) {
+            WorldBlock b{};
+            b.pos = pos;
+            b.size = size;
+            b.color = col;
+            b.slopeDir = slope;
+            b.bounds = b.ComputeBounds();
+            scene.blocks.push_back(b);
+        };
 
-        out << "# posX posY posZ tamX tamY tamZ R G B [SLOPE 1..4 opcional]\n";
-        out << "0.0 -0.5 0.0 52.0 1.0 52.0 58 64 74\n";
-        out << "0.0 2.5 -26.0 52.0 5.0 1.0 75 82 95\n";
-        out << "0.0 2.5 26.0 52.0 5.0 1.0 75 82 95\n";
-        out << "-26.0 2.5 0.0 1.0 5.0 52.0 75 82 95\n";
-        out << "26.0 2.5 0.0 1.0 5.0 52.0 75 82 95\n";
+        addBlk({   0.0f, -0.5f,   0.0f }, { 52.0f, 1.0f, 52.0f }, { 58, 64, 74, 255 });
+        addBlk({   0.0f,  2.5f, -26.0f }, { 52.0f, 5.0f,  1.0f }, { 75, 82, 95, 255 });
+        addBlk({   0.0f,  2.5f,  26.0f }, { 52.0f, 5.0f,  1.0f }, { 75, 82, 95, 255 });
+        addBlk({ -26.0f,  2.5f,   0.0f }, {  1.0f, 5.0f, 52.0f }, { 75, 82, 95, 255 });
+        addBlk({  26.0f,  2.5f,   0.0f }, {  1.0f, 5.0f, 52.0f }, { 75, 82, 95, 255 });
 
         if (preset == MapPreset::MOVEMENT_COURSE) {
-            out << "-6.0 0.5 12.0 4.0 1.0 4.0 95 130 165\n";
-            out << "0.0 1.1 6.0 4.0 2.2 4.0 95 150 185\n";
-            out << "6.0 1.7 0.0 4.0 3.4 4.0 95 170 205\n";
-            out << "0.0 2.2 -7.0 5.0 4.4 4.0 110 190 140\n";
-            out << "-8.0 2.6 -14.0 5.0 5.2 5.0 210 165 80\n";
-            out << "12.0 1.1 10.0 4.0 2.2 6.0 85 165 140 SLOPE 4\n";
-            out << "12.0 1.1 4.5 4.0 2.2 5.0 90 135 160\n";
-            out << "12.0 0.25 0.5 4.0 0.5 1.2 140 145 155\n";
-            out << "12.0 0.50 -0.7 4.0 1.0 1.2 140 145 155\n";
-            out << "12.0 0.75 -1.9 4.0 1.5 1.2 140 145 155\n";
-            out << "12.0 1.00 -3.1 4.0 2.0 1.2 140 145 155\n";
+            addBlk({ -6.0f, 0.5f,  12.0f }, { 4.0f, 1.0f, 4.0f }, {  95, 130, 165, 255 });
+            addBlk({  0.0f, 1.1f,   6.0f }, { 4.0f, 2.2f, 4.0f }, {  95, 150, 185, 255 });
+            addBlk({  6.0f, 1.7f,   0.0f }, { 4.0f, 3.4f, 4.0f }, {  95, 170, 205, 255 });
+            addBlk({  0.0f, 2.2f,  -7.0f }, { 5.0f, 4.4f, 4.0f }, { 110, 190, 140, 255 });
+            addBlk({ -8.0f, 2.6f, -14.0f }, { 5.0f, 5.2f, 5.0f }, { 210, 165,  80, 255 });
+            addBlk({ 12.0f, 1.1f,  10.0f }, { 4.0f, 2.2f, 6.0f }, {  85, 165, 140, 255 }, 4);
+            addBlk({ 12.0f, 1.1f,   4.5f }, { 4.0f, 2.2f, 5.0f }, {  90, 135, 160, 255 });
+            addBlk({ 12.0f, 0.25f,  0.5f }, { 4.0f, 0.5f, 1.2f }, { 140, 145, 155, 255 });
+            addBlk({ 12.0f, 0.50f, -0.7f }, { 4.0f, 1.0f, 1.2f }, { 140, 145, 155, 255 });
+            addBlk({ 12.0f, 0.75f, -1.9f }, { 4.0f, 1.5f, 1.2f }, { 140, 145, 155, 255 });
+            addBlk({ 12.0f, 1.00f, -3.1f }, { 4.0f, 2.0f, 1.2f }, { 140, 145, 155, 255 });
         } else if (preset == MapPreset::FIRING_RANGE) {
-            out << "0.0 0.6 9.5 16.0 1.2 0.7 110 118 130\n";
-            out << "-5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70\n";
-            out << "5.5 1.1 -2.0 2.6 2.2 0.45 165 110 70\n";
-            out << "0.0 1.3 -6.5 3.4 2.6 0.9 95 105 120\n";
+            addBlk({  0.0f, 0.6f,  9.5f }, { 16.0f, 1.2f, 0.70f }, { 110, 118, 130, 255 });
+            addBlk({ -5.5f, 1.1f, -2.0f }, {  2.6f, 2.2f, 0.45f }, { 165, 110,  70, 255 });
+            addBlk({  5.5f, 1.1f, -2.0f }, {  2.6f, 2.2f, 0.45f }, { 165, 110,  70, 255 });
+            addBlk({  0.0f, 1.3f, -6.5f }, {  3.4f, 2.6f, 0.90f }, {  95, 105, 120, 255 });
         } else {
-            out << "-4.5 0.75 7.5 3.2 1.5 0.8 100 110 125\n";
-            out << "4.5 0.75 7.5 3.2 1.5 0.8 100 110 125\n";
-            out << "0.0 1.2 1.5 4.2 2.4 1.1 90 100 115\n";
-            out << "-9.5 1.35 0.0 2.8 2.7 0.55 155 105 70\n";
-            out << "9.5 1.35 0.0 2.8 2.7 0.55 155 105 70\n";
-            out << "-5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120\n";
-            out << "5.5 1.25 -6.0 3.4 2.5 0.9 95 105 120\n";
-            out << "0.0 1.5 -12.5 5.5 3.0 1.2 82 92 108\n";
+            addBlk({ -4.5f, 0.75f,   7.5f }, { 3.2f, 1.5f, 0.80f }, { 100, 110, 125, 255 });
+            addBlk({  4.5f, 0.75f,   7.5f }, { 3.2f, 1.5f, 0.80f }, { 100, 110, 125, 255 });
+            addBlk({  0.0f, 1.20f,   1.5f }, { 4.2f, 2.4f, 1.10f }, {  90, 100, 115, 255 });
+            addBlk({ -9.5f, 1.35f,   0.0f }, { 2.8f, 2.7f, 0.55f }, { 155, 105,  70, 255 });
+            addBlk({  9.5f, 1.35f,   0.0f }, { 2.8f, 2.7f, 0.55f }, { 155, 105,  70, 255 });
+            addBlk({ -5.5f, 1.25f,  -6.0f }, { 3.4f, 2.5f, 0.90f }, {  95, 105, 120, 255 });
+            addBlk({  5.5f, 1.25f,  -6.0f }, { 3.4f, 2.5f, 0.90f }, {  95, 105, 120, 255 });
+            addBlk({  0.0f, 1.50f, -12.5f }, { 5.5f, 3.0f, 1.20f }, {  82,  92, 108, 255 });
         }
+
+        scene.entities = BuildDefaultEntitiesForPreset(preset);
+        SaveSceneToFile(filename, scene);
     }
 };

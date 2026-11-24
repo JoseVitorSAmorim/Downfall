@@ -78,6 +78,7 @@ public:
     std::vector<ExplosiveBarrel> barrels;
     std::vector<AmmoCrate> crates;
     std::vector<HackTerminal> terminals;
+    std::vector<Vector3> reinforcementSpawns;
     ExtractionZone extraction;
     MissionStats stats;
 
@@ -85,48 +86,85 @@ public:
     float pulseTimer = 0.0f;
     bool reinforcementsSpawned = false;
 
-    void SetupForMode(bool isCampaignMission, bool isCombatSandbox) {
+    void LoadFromScene(const SceneData& scene, bool isCampaignMission, bool isCombatSandbox) {
         barrels.clear();
         crates.clear();
         terminals.clear();
+        reinforcementSpawns.clear();
         stats = MissionStats();
         playerDownedTimer = 0.0f;
         pulseTimer = 0.0f;
         reinforcementsSpawned = false;
         defeatReason = "";
 
+        extraction.pos = { 0.0f, 0.0f, 16.5f };
+        extraction.radius = 3.2f;
+        extraction.isActive = false;
+
         if (!isCampaignMission && !isCombatSandbox) {
             state = MissionState::SANDBOX;
             return;
         }
 
-        crates = {
-            { { -7.5f, 0.0f,  9.5f }, 0.0f, 12.0f },
-            { {  7.5f, 0.0f,  9.5f }, 0.0f, 12.0f }
-        };
+        bool hasExtractMarker = false;
+        int autoTermId = 1;
 
-        barrels = {
-            { { -3.2f, 0.0f, -13.5f }, 35.0f, false },
-            { {  4.2f, 0.0f, -13.5f }, 35.0f, false },
-            { { -9.5f, 0.0f,  -8.0f }, 35.0f, false },
-            { {  9.5f, 0.0f,  -8.0f }, 35.0f, false }
-        };
+        for (const auto& ent : scene.entities) {
+            switch (ent.type) {
+                case SceneEntityType::BARREL:
+                    barrels.push_back({ ent.pos, 35.0f, false });
+                    break;
+                case SceneEntityType::CRATE:
+                    crates.push_back({ ent.pos, 0.0f, 12.0f });
+                    break;
+                case SceneEntityType::TERMINAL:
+                    if (isCampaignMission) {
+                        int tid = (ent.paramA > 0) ? ent.paramA : autoTermId++;
+                        std::string lbl = ent.tag.empty()
+                            ? std::string(TextFormat("Terminal 0%d", tid))
+                            : ent.tag;
+                        terminals.push_back({ tid, lbl, ent.pos, 0.0f, false });
+                    }
+                    break;
+                case SceneEntityType::EXTRACT:
+                    if (isCampaignMission) {
+                        extraction.pos = ent.pos;
+                        extraction.radius = std::max(1.2f, ent.size.x);
+                        hasExtractMarker = true;
+                    }
+                    break;
+                case SceneEntityType::SPAWN_ENEMY:
+                    if (isCampaignMission && ent.paramB == 1) {
+                        reinforcementSpawns.push_back(ent.pos);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
 
         if (isCampaignMission) {
             state = MissionState::IN_PROGRESS;
-            phase = ObjectivePhase::HACK_TERMINALS;
-
-            terminals = {
-                { 1, "Terminal Alpha (Oeste)", { -13.0f, 0.0f, -4.8f }, 0.0f, false },
-                { 2, "Terminal Bravo (Leste)", {  13.0f, 0.0f, -4.8f }, 0.0f, false }
-            };
-
-            extraction.pos = { 0.0f, 0.0f, 16.5f };
-            extraction.radius = 3.2f;
-            extraction.isActive = false;
+            if (!terminals.empty()) {
+                phase = ObjectivePhase::HACK_TERMINALS;
+            } else {
+                phase = ObjectivePhase::CLEAR_HOSTILES;
+            }
+            if (!hasExtractMarker) {
+                extraction.pos = { 0.0f, 0.0f, 16.5f };
+                extraction.radius = 3.2f;
+            }
         } else {
             state = MissionState::SANDBOX;
         }
+    }
+
+    void SetupForMode(bool isCampaignMission, bool isCombatSandbox) {
+        MapPreset preset = isCampaignMission ? MapPreset::SQUAD_ARENA
+                         : (isCombatSandbox ? MapPreset::FIRING_RANGE : MapPreset::MOVEMENT_COURSE);
+        SceneData fallbackScene;
+        fallbackScene.entities = LevelLoader::BuildDefaultEntitiesForPreset(preset);
+        LoadFromScene(fallbackScene, isCampaignMission, isCombatSandbox);
     }
 
     int CheckBarrelShot(Ray ray, float maxDist) {
@@ -267,8 +305,15 @@ public:
                 if (!reinforcementsSpawned) {
                     reinforcementsSpawned = true;
                     int nextId = (int)enemies.size() + 1;
-                    enemies.push_back({ nextId,     { -11.0f, 0.0f, -19.0f }, { -11.0f, 0.0f, -19.0f }, 100.0f, 100.0f, 0.6f, 0.0f, 0.0f, false, -1 });
-                    enemies.push_back({ nextId + 1, {  11.0f, 0.0f, -19.0f }, {  11.0f, 0.0f, -19.0f }, 100.0f, 100.0f, 0.9f, 0.4f, 0.0f, false, -1 });
+                    if (!reinforcementSpawns.empty()) {
+                        for (size_t r = 0; r < reinforcementSpawns.size(); r++) {
+                            Vector3 sp = reinforcementSpawns[r];
+                            enemies.push_back({ nextId++, sp, sp, 100.0f, 100.0f, 0.7f, (float)r * 0.4f, 0.0f, false, -1 });
+                        }
+                    } else {
+                        enemies.push_back({ nextId,     { -11.0f, 0.0f, -19.0f }, { -11.0f, 0.0f, -19.0f }, 100.0f, 100.0f, 0.6f, 0.0f, 0.0f, false, -1 });
+                        enemies.push_back({ nextId + 1, {  11.0f, 0.0f, -19.0f }, {  11.0f, 0.0f, -19.0f }, 100.0f, 100.0f, 0.9f, 0.4f, 0.0f, false, -1 });
+                    }
                     audio.PlayOrder();
                 }
             }
@@ -291,7 +336,6 @@ public:
     }
 
     void Draw3D(const AssetManager& assets) const {
-        // Barris Explosivos (.glb ou cubos)
         for (const auto& b : barrels) {
             if (b.exploded) continue;
             if (assets.HasPropModel(PropAssetId::BARREL)) {
@@ -303,7 +347,6 @@ public:
             }
         }
 
-        // Caixas de Suprimento (.glb ou cubos)
         for (const auto& c : crates) {
             if (assets.HasPropModel(PropAssetId::CRATE)) {
                 Color tint = c.IsReady() ? WHITE : Fade(GRAY, 0.65f);
@@ -317,7 +360,6 @@ public:
             }
         }
 
-        // Terminais de Hack (.glb ou cubos)
         for (const auto& t : terminals) {
             Color screenCol = t.isHacked ? GREEN : SKYBLUE;
             if (assets.HasPropModel(PropAssetId::TERMINAL)) {
@@ -334,7 +376,6 @@ public:
             }
         }
 
-        // Zona de Extração
         if (extraction.isActive) {
             float pulse = extraction.radius + sinf(pulseTimer * 4.5f) * 0.22f;
             DrawCircle3D({ extraction.pos.x, 0.05f, extraction.pos.z }, pulse, { 1.0f, 0.0f, 0.0f }, 90.0f, GREEN);

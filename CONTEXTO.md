@@ -173,7 +173,7 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
 
         SquadAI.hpp: Integração de NavigateAgentTo (A*) e suporte a degraus/rampas em MoveCharacterWithCollision, UpdateAllies e UpdateEnemies para aliados e inimigos contornarem salas fechadas, corredores em L e múltiplos andares.
         
-[SAVEPOINT_22 — ATUAL] Arquitetura Orientada a Eventos (Event Bus) & Unificação de Entidades (Events.hpp, Combatant.hpp, SquadAI.hpp, main.cpp)
+[SAVEPOINT_22] Arquitetura Orientada a Eventos (Event Bus) & Unificação de Entidades (Events.hpp, Combatant.hpp, SquadAI.hpp, main.cpp)
 
     Status: Implementado, corrigido e modularizado (Events.hpp, Combatant.hpp, World.hpp, Navigation.hpp, SquadAI.hpp, Weapon.hpp, main.cpp).
 
@@ -189,15 +189,12 @@ Um jogo de tiro tático cooperativo para 4 jogadores inspirado em **Army of Two*
         
 [SAVEPOINT_23] Cenários Orientados a Dados (Data-Driven Scene Serialization) (World.hpp, Objectives.hpp, Cutscene.hpp, MapEditor.hpp)
 
-    Status: Planejado (Pipeline de Conteúdo).
+    Status: Implementado.
 
-    Objetivo:
+    Adicionado / Corrigido:
+    Tipado Retrocompatível (World.hpp): O LevelLoader e o SceneSerializer leem e gravam blocos (BLOCK ou linhas numéricas antigas) e marcadores jogáveis tipados (SPAWN_ALLY, SPAWN_ENEMY, TERMINAL, BARREL, CRATE, EXTRACT, TRIGGER), suportando tanto .txt quanto .scene. Se um arquivo legado contiver apenas blocos, os marcadores padrão daquele preset são gerados automaticamente.   
 
-        Expandir o formato de arquivo de cenário (.scene / .txt tipado) para serializar entidades jogáveis (SPAWN_ALLY, SPAWN_ENEMY, TERMINAL, BARREL, CRATE, EXTRACT, TRIGGER) junto aos blocos geométricos.
-
-        Permitir posicionar, editar e exportar esses marcadores diretamente dentro do InGameMapEditor, criando fases completas sem recompilar o código C++.
-
-[SAVEPOINT_24] Interpolação de Snapshots & Canal Confiável no Netcode (Network.hpp, main.cpp)
+[SAVEPOINT_24 - ATUAL] Interpolação de Snapshots & Canal Confiável no Netcode (Network.hpp, main.cpp)
 
     Status: Planejado (Estabilidade Multiplayer).
 

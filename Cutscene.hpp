@@ -2,6 +2,7 @@
 
 #include "raylib.h"
 #include "raymath.h"
+#include "World.hpp"
 #include "Audio.hpp"
 #include <vector>
 #include <string>
@@ -41,14 +42,8 @@ public:
 
     bool showDebugTriggers = false;
 
-    void SetupForMode(bool isCampaignMission, Vector3 playerStartEye, Vector3 playerStartTarget) {
+    void BuildDefaultSequences(Vector3 playerStartEye, Vector3 playerStartTarget) {
         sequences.clear();
-        triggers.clear();
-        playing = false;
-        activeSequenceIdx = -1;
-        currentKeyframeIdx = 0;
-        segmentTimer = 0.0f;
-        letterboxRatio = 0.0f;
 
         // Sequência 0: Inserção Tática (Panorama da Arena e Terminais)
         CutsceneSequence introSeq;
@@ -82,7 +77,7 @@ public:
         };
         sequences.push_back(introSeq);
 
-        // Sequência 1: Reconhecimento do Pátio Central (Trigger Zone 1)
+        // Sequência 1: Reconhecimento do Pátio Central
         CutsceneSequence courtyardSeq;
         courtyardSeq.id = 1;
         courtyardSeq.title = "CONTATO NO PATIO CENTRAL";
@@ -106,7 +101,7 @@ public:
         };
         sequences.push_back(courtyardSeq);
 
-        // Sequência 2: Zona de Extração Liberada (Trigger Zone 2)
+        // Sequência 2: Zona de Extração Liberada
         CutsceneSequence extractSeq;
         extractSeq.id = 2;
         extractSeq.title = "PERIMETRO DE EXTRACAO";
@@ -121,30 +116,43 @@ public:
             }
         };
         sequences.push_back(extractSeq);
+    }
 
-        if (isCampaignMission) {
-            triggers.push_back({
-                1,
-                "TRIGGER: PATIO CENTRAL",
-                { { -14.0f, 0.0f, 1.5f }, { 14.0f, 4.0f, 5.5f } },
-                1,
-                true,
-                false,
-                false,
-                GOLD
-            });
+    void SetupFromScene(const SceneData& scene, bool isCampaignMission, Vector3 playerStartEye, Vector3 playerStartTarget) {
+        triggers.clear();
+        playing = false;
+        activeSequenceIdx = -1;
+        currentKeyframeIdx = 0;
+        segmentTimer = 0.0f;
+        letterboxRatio = 0.0f;
 
-            triggers.push_back({
-                2,
-                "TRIGGER: EXTRACAO",
-                { { -10.0f, 0.0f, 11.0f }, { 10.0f, 4.0f, 14.2f } },
-                2,
-                true,
-                false,
-                true,
-                GREEN
-            });
+        BuildDefaultSequences(playerStartEye, playerStartTarget);
+
+        if (!isCampaignMission) return;
+
+        int nextTrigId = 1;
+        for (const auto& ent : scene.entities) {
+            if (ent.type != SceneEntityType::TRIGGER) continue;
+
+            TriggerZone tz{};
+            tz.id = nextTrigId++;
+            tz.name = ent.tag.empty() ? std::string(TextFormat("TRIGGER 0%d", tz.id)) : ent.tag;
+            tz.bounds = ent.GetAABB();
+            tz.cutsceneId = (ent.paramA >= 0) ? ent.paramA : 1;
+            tz.oneShot = true;
+            tz.triggered = false;
+            tz.requiresExtractionActive = (ent.paramB != 0);
+            tz.color = tz.requiresExtractionActive ? GREEN : GOLD;
+            triggers.push_back(tz);
         }
+    }
+
+    void SetupForMode(bool isCampaignMission, Vector3 playerStartEye, Vector3 playerStartTarget) {
+        SceneData defaultScene;
+        if (isCampaignMission) {
+            defaultScene.entities = LevelLoader::BuildDefaultEntitiesForPreset(MapPreset::SQUAD_ARENA);
+        }
+        SetupFromScene(defaultScene, isCampaignMission, playerStartEye, playerStartTarget);
     }
 
     bool Play(int sequenceId, Vector3 currentCamPos, Vector3 currentCamTarget, float currentFov, ProceduralAudio& audio) {
@@ -166,7 +174,6 @@ public:
         anchorStartTarget = currentCamTarget;
         anchorStartFov = currentFov;
 
-        // Atualiza o último keyframe para retornar suavemente à visão atual do jogador
         CutsceneKeyframe& lastKf = sequences[activeSequenceIdx].keyframes.back();
         lastKf.pos = currentCamPos;
         lastKf.target = currentCamTarget;
@@ -270,7 +277,6 @@ public:
                 tz.bounds.max.z - tz.bounds.min.z
             };
 
-            // Marca sutil no piso para indicar área de evento tático
             DrawCubeWires({ center.x, 0.04f, center.z }, size.x, 0.04f, size.z, Fade(tz.color, 0.35f));
 
             if (showDebugTriggers) {
@@ -300,13 +306,11 @@ public:
 
         const CutsceneKeyframe& kf = seq.keyframes[currentKeyframeIdx];
 
-        // Título da cena no letterbox superior
         DrawText(seq.title.c_str(), 28, std::max(10, barHeight / 2 - 9), 18, SKYBLUE);
 
         const char* skipHint = "[ESPACO] PULAR CENA";
         DrawText(skipHint, screenWidth - MeasureText(skipHint, 15) - 28, std::max(10, barHeight / 2 - 7), 15, LIGHTGRAY);
 
-        // Legenda cinematográfica no letterbox inferior
         int subAreaTop = screenHeight - barHeight + 12;
         if (!kf.speaker.empty()) {
             const char* speakerTag = TextFormat("[%s]", kf.speaker.c_str());
@@ -317,7 +321,6 @@ public:
             DrawText(kf.subtitle.c_str(), screenWidth / 2 - MeasureText(kf.subtitle.c_str(), 19) / 2, subAreaTop + 24, 19, RAYWHITE);
         }
 
-        // Barra discreta de progresso da cutscene
         float totalDur = 0.0f;
         float elapsedDur = 0.0f;
         for (size_t i = 0; i < seq.keyframes.size(); i++) {
